@@ -9,6 +9,8 @@ const statusEl = $("status");
 
 let ws = null;
 let room = null;
+let actx = null;
+let sessionId = null;
 let epoch = 0;
 let playing = false;
 
@@ -33,6 +35,7 @@ async function start() {
     });
     if (!resp.ok) throw new Error("create session failed: " + (await resp.text()));
     const sess = await resp.json();
+    sessionId = sess.session_id;
 
     // 2. Join the LiveKit room (token issued by the service).
     setStatus("连接 LiveKit…");
@@ -54,7 +57,7 @@ async function start() {
     setStatus("推流中…");
     const arrayBuf = await file.arrayBuffer();
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    const actx = new AudioCtx({ sampleRate: 16000 });
+    actx = new AudioCtx({ sampleRate: 16000 });
     const decoded = await actx.decodeAudioData(arrayBuf.slice(0));
     // Convert to 16kHz mono int16 PCM.
     const src = decoded.getChannelData(0);
@@ -130,6 +133,19 @@ async function teardown() {
   if (room) {
     await room.disconnect();
     room = null;
+  }
+  // Release the server-side session immediately (avoids waiting for TTL reap).
+  if (sessionId) {
+    try {
+      await fetch(`/v1/sessions/${sessionId}`, { method: "DELETE" });
+    } catch (err) {
+      console.warn("session close failed", err);
+    }
+    sessionId = null;
+  }
+  if (actx) {
+    actx.close().catch(() => {});
+    actx = null;
   }
 }
 

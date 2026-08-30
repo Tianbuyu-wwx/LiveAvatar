@@ -192,3 +192,12 @@ class AvatarPool(WorkerPool[AvatarWorker, AvatarAssets]):
             vae_model_dir=self._config.vae_model_dir,
             shared_models=self._shared_models,
         )
+
+    def _on_worker_evicted(self, worker: AvatarWorker) -> None:
+        """Release the evicted worker's per-avatar memory (frames/latents).
+
+        Shared MuseTalk models are owned by the pool and stay loaded.
+        """
+        unload = getattr(worker, "unload_avatar_data", None)
+        if callable(unload):
+            unload()

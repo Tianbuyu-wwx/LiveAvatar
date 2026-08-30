@@ -1,5 +1,7 @@
 # LiveAvatar
 
+[![CI](https://github.com/Tianbuyu-wwx/LiveAvatar/actions/workflows/ci.yml/badge.svg)](https://github.com/Tianbuyu-wwx/LiveAvatar/actions/workflows/ci.yml)
+
 **实时流式数字人口型视频生成**：PCM 音频进，MuseTalk 口型视频出，经 LiveKit/WebRTC 推到浏览器。
 
 LiveAvatar 从一个生产级全双工数字人系统中拆出视频生成全链路，做成独立、可嵌入的开源库 + 服务：
@@ -98,6 +100,10 @@ uvicorn liveavatar.publish:app --host 0.0.0.0 --port 8000
 | `LIVEAVATAR_WHISPER_MODEL_PATH` | `models/whisper` | Whisper-tiny 权重 |
 | `LIVEAVATAR_MUSETALK_MODEL_DIR` | `models/musetalkV15` | UNet 权重目录 |
 | `LIVEAVATAR_VAE_MODEL_DIR` | `models/sd-vae-ft-mse` | VAE 目录 |
+| `LIVEAVATAR_MAX_LOADED_WORKERS` | `0` | 同时驻留的 worker 上限（超出按 LRU 卸载；0 = 不限制） |
+| `LIVEAVATAR_API_KEY` | *(空)* | 服务端共享密钥；非空时 REST/WS 需携带（`X-API-Key` 头或 WS `api_key` 参数） |
+| `LIVEAVATAR_MAX_SESSIONS` | `16` | 并发会话上限（超出返回 429） |
+| `LIVEAVATAR_MAX_WS_FRAME_BYTES` | `65536` | WS 二进制帧上限（超限丢弃，防 DoS） |
 
 服务端（`LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`LIVEKIT_ROOM`、`PUBLIC_LIVEKIT_URL`）见 `liveavatar/publish.py`。
 

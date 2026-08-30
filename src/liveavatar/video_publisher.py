@@ -17,7 +17,8 @@ Frame format
 ``VideoSource.capture_frame`` expects I420 (YUV 4:2:0). The conversion
 happens in ``_capture_frame`` which:
 1. Tries ``cv2.cvtColor(..., COLOR_BGR2YUV_I420)`` when cv2 is available.
-2. Falls back to a pure-numpy BT.601 conversion.
+2. Falls back to a pure-numpy BT.601 limited-range conversion with
+   identical output (±1 rounding).
 
 Tests override ``_capture_frame`` to avoid the livekit/cv2 dependency.
 """
@@ -56,13 +57,8 @@ class VideoPublisherStats:
     track_published: bool = False
 
 
-def _bgr24_to_i420(bgr_data: bytes, width: int, height: int) -> bytes:
-    """Convert BGR24 pixel data to I420 (YUV 4:2:0) planar format.
-
-    Uses a pure-numpy BT.601 full-range conversion so the output is deterministic
-    across OpenCV versions and matches LiveKit's expectation of [0,255] Y/U/V.
-    Output layout: Y plane (H×W) + U plane (H/2×W/2) + V plane (H/2×W/2).
-    """
+def _numpy_bgr24_to_i420(bgr_data: bytes, width: int, height: int) -> bytes:
+    """Pure-numpy BT.601 limited-range conversion (matches cv2 output ±1)."""
     import numpy as np
 
     bgr = np.frombuffer(bgr_data, dtype=np.uint8).reshape(height, width, 3)
@@ -70,16 +66,31 @@ def _bgr24_to_i420(bgr_data: bytes, width: int, height: int) -> bytes:
     g = bgr[:, :, 1].astype(np.float32)
     r = bgr[:, :, 2].astype(np.float32)
 
-    # BT.601 full-range conversion.
-    y = (0.299 * r + 0.587 * g + 0.114 * b).clip(0, 255).astype(np.uint8)
-    u_full = (-0.169 * r - 0.331 * g + 0.500 * b + 128).clip(0, 255).astype(np.uint8)
-    v_full = (0.500 * r - 0.419 * g - 0.081 * b + 128).clip(0, 255).astype(np.uint8)
+    y = (16.0 + (65.481 * r + 128.553 * g + 24.966 * b) / 255.0).clip(0, 255).astype(np.uint8)
+    u = (128.0 + (-37.797 * r - 74.203 * g + 112.0 * b) / 255.0).clip(0, 255).astype(np.uint8)
+    v = (128.0 + (112.0 * r - 93.786 * g - 18.214 * b) / 255.0).clip(0, 255).astype(np.uint8)
 
     # 2×2 downsample for U and V (I420 = 4:2:0).
-    u_ds = u_full[::2, ::2]
-    v_ds = v_full[::2, ::2]
+    return y.tobytes() + u[::2, ::2].tobytes() + v[::2, ::2].tobytes()
 
-    return y.tobytes() + u_ds.tobytes() + v_ds.tobytes()
+
+def _bgr24_to_i420(bgr_data: bytes, width: int, height: int) -> bytes:
+    """Convert BGR24 pixel data to I420 (YUV 4:2:0) planar format.
+
+    Fast path: ``cv2.cvtColor(..., COLOR_BGR2YUV_I420)`` when OpenCV is
+    available. Fallback: pure-numpy BT.601 limited-range conversion with
+    identical output (±1 rounding) so behaviour is deterministic across
+    environments. Output layout: Y plane (H×W) + U plane (H/2×W/2) +
+    V plane (H/2×W/2).
+    """
+    try:
+        import cv2
+        import numpy as np
+
+        bgr = np.frombuffer(bgr_data, dtype=np.uint8).reshape(height, width, 3)
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420).tobytes()
+    except ImportError:
+        return _numpy_bgr24_to_i420(bgr_data, width, height)
 
 
 class AvatarVideoPublisher:

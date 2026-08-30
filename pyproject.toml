@@ -45,7 +45,12 @@ addopts = "-q"
 
 [tool.coverage.run]
 source = ["src/liveavatar"]
-omit = ["src/liveavatar/musetalk/*"]
+omit = [
+    "src/liveavatar/musetalk/*",
+    # Torch/GPU inference module — covered by real-GPU integration runs,
+    # not by CPU CI (fake-model tests run only where torch is installed).
+    "src/liveavatar/musetalk_worker.py",
+]
 
 [tool.coverage.report]
 show_missing = true

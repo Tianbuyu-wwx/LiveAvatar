@@ -88,6 +88,7 @@ class WorkerPool(Generic[WorkerT, AssetsT]):
         self._worker_factory = worker_factory or self._default_worker_factory
         self._resources = resources if resources is not None else self._discover_resources()
         self._workers: dict[str, WorkerT] = {}
+        self._loaded_at: dict[str, float] = {}
         self._leases: dict[str, Lease[WorkerT]] = {}
         self._waiters: dict[str, deque[Waiter[WorkerT]]] = defaultdict(deque)
         self._lock = asyncio.Lock()
@@ -130,6 +131,11 @@ class WorkerPool(Generic[WorkerT, AssetsT]):
     @property
     def _acquire_timeout(self) -> float:
         return float(getattr(self._config, "acquire_timeout", 5.0))
+
+    @property
+    def _max_loaded_workers(self) -> int:
+        """Cap on concurrently loaded workers (0 = unlimited)."""
+        return int(getattr(self._config, "max_loaded_workers", 0))
 
     # ----------------------------------------------------- lifecycle
 
@@ -361,7 +367,7 @@ class WorkerPool(Generic[WorkerT, AssetsT]):
     # ---------------------------------------------------------- reap
 
     async def _reap_loop(self) -> None:
-        """Background task that reclaims expired leases."""
+        """Background task that reclaims expired leases and evicts overflow."""
         while self._started:
             try:
                 await asyncio.sleep(self._reap_interval)
@@ -370,6 +376,12 @@ class WorkerPool(Generic[WorkerT, AssetsT]):
                     self._logger.info(
                         "pool_reap_completed",
                         extra={"expired_count": count, "kind": self._resource_kind},
+                    )
+                evicted = await self._evict_overflow()
+                if evicted:
+                    self._logger.info(
+                        "pool_overflow_evicted",
+                        extra={"evicted": evicted, "kind": self._resource_kind},
                     )
             except asyncio.CancelledError:
                 break
@@ -400,6 +412,67 @@ class WorkerPool(Generic[WorkerT, AssetsT]):
 
     # ---------------------------------------------------- worker load
 
+    async def evict_worker(self, resource_id: str) -> bool:
+        """Unload a loaded worker to free its resources.
+
+        Fails (returns False) when the resource is unknown, has an active
+        lease, or has pending waiters. After removal,
+        :meth:`_on_worker_evicted` releases per-worker resources.
+        """
+        async with self._lock:
+            if resource_id not in self._workers:
+                return False
+            if any(
+                lease.resource_id == resource_id
+                for lease in self._leases.values()
+            ):
+                return False
+            if self._waiters.get(resource_id):
+                return False
+            worker = self._workers.pop(resource_id)
+            self._loaded_at.pop(resource_id, None)
+        self._on_worker_evicted(worker)
+        self._logger.info(
+            "pool_worker_evicted",
+            extra={"resource_id": resource_id, "kind": self._resource_kind},
+        )
+        return True
+
+    def _on_worker_evicted(self, worker: WorkerT) -> None:
+        """Hook: release per-worker resources after eviction."""
+
+    async def _evict_overflow(self) -> int:
+        """Evict least-recently-loaded workers above ``max_loaded_workers``."""
+        cap = self._max_loaded_workers
+        if cap <= 0 or len(self._workers) <= cap:
+            return 0
+        async with self._lock:
+            if len(self._workers) <= cap:
+                return 0
+            candidates = sorted(
+                self._workers,
+                key=lambda rid: self._loaded_at.get(rid, 0.0),
+            )
+            evicted = 0
+            for rid in candidates:
+                if len(self._workers) <= cap:
+                    break
+                if any(
+                    lease.resource_id == rid for lease in self._leases.values()
+                ):
+                    continue
+                if self._waiters.get(rid):
+                    continue
+                worker = self._workers.pop(rid)
+                self._loaded_at.pop(rid, None)
+                self._on_worker_evicted(worker)
+                evicted += 1
+                self._logger.info(
+                    "pool_worker_evicted",
+                    extra={"resource_id": rid, "kind": self._resource_kind},
+                )
+        return evicted
+
     async def _load_worker(self, resource_id: str) -> WorkerT:
         """Load (or return existing) worker for ``resource_id``.
 
@@ -418,6 +491,7 @@ class WorkerPool(Generic[WorkerT, AssetsT]):
         assets = self._resources[resource_id]
         worker = await asyncio.to_thread(self._worker_factory, assets)
         self._workers[resource_id] = worker
+        self._loaded_at[resource_id] = time.monotonic()
         self._logger.info(
             "pool_worker_loaded",
             extra={

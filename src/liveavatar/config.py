@@ -42,6 +42,9 @@ class AvatarPoolConfig(BaseSettings):
     lease_ttl: float = 300.0
     reap_interval: float = 30.0
     acquire_timeout: float = 10.0
+    # Cap on concurrently loaded workers (0 = load on demand, never evict).
+    # Workers above the cap are evicted LRU-style, freeing avatar memory.
+    max_loaded_workers: int = 0
 
     target_fps: int = 25
     width: int = 512
