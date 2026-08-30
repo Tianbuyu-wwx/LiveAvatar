@@ -161,14 +161,14 @@ src/liveavatar/
 └── musetalk/            # MuseTalk 模型定义（自包含）
 scripts/                 # download_models / prepare_avatar / face_align
 web/                     # 浏览器 demo（无构建，原生 JS + livekit-client CDN）
-tests/                   # 96 个单测
+tests/                   # 171 个单测
 ```
 
 ## Roadmap
 
-- [ ] 离线批量渲染（batch_renderer）
-- [ ] ASR/TTS 官方插件接口与示例
-- [ ] 更多发布后端（RTMP、本地 WS-MJPEG）
+- [x] 离线批量渲染（`python -m liveavatar.batch_renderer`）
+- [x] ASR/TTS 插件接口草案（`liveavatar.plugins`；官方示例插件待发布）
+- [x] 更多发布后端（`liveavatar.sinks.PublishSink` 协议 + RTMP 后端；本地 WS-MJPEG 待实现）
 - [ ] Apple Silicon (MPS) 支持
 
 ## 许可证

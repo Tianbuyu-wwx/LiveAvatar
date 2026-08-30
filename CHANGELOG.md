@@ -2,6 +2,14 @@
 
 所有显著变更记录于此。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.3.0] - 2026-08-30
+
+### Added
+- 离线批量渲染器 `python -m liveavatar.batch_renderer`（wav → mp4，走 worker 离线长音频路径）。
+- 发布后端抽象 `liveavatar.sinks.PublishSink` 协议 + `RtmpSink`（ffmpeg 子进程输出 RTMP/FLV，无新增 Python 依赖）。
+- 插件接口草案 `liveavatar.plugins`（ASR/TTS 结构化协议 + 进程内注册表 + importlib entry-points 自动发现）。
+- 14 个新测试（sinks/plugins/batch_renderer）。
+
 ## [0.2.0] - 2026-08-30
 
 ### Security
