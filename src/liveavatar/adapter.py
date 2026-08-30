@@ -193,8 +193,14 @@ class AvatarStreamingAdapter:
 
         Called from ``start()`` and re-spawned lazily from ``push_pcm`` when
         the adapter is driven from a different loop than the one it started
-        on (e.g. embedded in a request-per-loop test client).
+        on (e.g. embedded in a request-per-loop test client). The stale
+        task is cancelled fire-and-forget — awaiting it cross-loop is not
+        possible and it must never race the new consumer on the shared
+        queue.
         """
+        old = self._consumer_task
+        if old is not None and not old.done():
+            old.cancel()
         self._consumer_task = asyncio.create_task(self._consume_loop())
         self._consumer_loop = asyncio.get_running_loop()
 

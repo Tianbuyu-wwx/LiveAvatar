@@ -103,6 +103,27 @@ class PublishTestCase(unittest.TestCase):
         # Drop the pipeline so the next test starts clean.
         state.pipeline = None
 
+    def _stats(self, session_id: str) -> dict:
+        resp = self.client.get(f"/v1/sessions/{session_id}/stats")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()
+
+    def _poll_until(self, session_id: str, predicate, timeout_s: float = 5.0):
+        """Poll session stats until ``predicate(body)`` holds.
+
+        Deterministic replacement for fixed sleeps: the WS handler and the
+        adapter consumer run on a background portal loop, so wall-clock
+        sleeps are racy under CI load.
+        """
+        deadline = time.monotonic() + timeout_s
+        body = self._stats(session_id)
+        while not predicate(body):
+            if time.monotonic() > deadline:
+                self.fail(f"timeout waiting for stats condition: {body}")
+            time.sleep(0.02)
+            body = self._stats(session_id)
+        return body
+
 
 class TestHealthAndAvatars(PublishTestCase):
     def test_health(self):
@@ -189,16 +210,13 @@ class TestWebSocketAudio(PublishTestCase):
             # Send 3 chunks (60ms of audio → 12 frames at 25fps batch 4).
             for _ in range(3):
                 ws.send_bytes(_pcm(320))
-            # Keep the connection open so the background consumer can drain
-            # the queue while we wait.
-            time.sleep(0.5)
+            # Poll inside the WS block: the consumer runs on the WS portal
+            # loop, so keep the connection open until all frames land.
+            body = self._poll_until(
+                "s1", lambda b: b["adapter"]["frames_published"] >= 12
+            )
             ws.send_text(json.dumps({"type": "stop"}))
 
-        # Give the consumer a final beat to flush.
-        time.sleep(0.1)
-        resp = self.client.get("/v1/sessions/s1/stats")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
         self.assertEqual(body["adapter"]["pcm_chunks_pushed"], 3)
         self.assertEqual(body["adapter"]["frames_published"], 12)
 
@@ -212,15 +230,17 @@ class TestWebSocketAudio(PublishTestCase):
         self.client.post("/v1/sessions", json={"session_id": "s1"})
         with self.client.websocket_connect("/v1/sessions/s1/audio") as ws:
             ws.send_text(json.dumps({"type": "epoch", "epoch": 5}))
+            # Wait until the control message has actually been applied
+            # server-side before pushing PCM.
+            self._poll_until("s1", lambda b: b["epoch"] >= 5)
             ws.send_bytes(_pcm(320))
-            time.sleep(0.2)
-            body = self.client.get("/v1/sessions/s1/stats").json()
+            body = self._poll_until(
+                "s1", lambda b: b["adapter"]["pcm_chunks_pushed"] >= 1
+            )
             self.assertEqual(body["epoch"], 5)
-            self.assertEqual(body["adapter"]["pcm_chunks_pushed"], 1)
             self.assertEqual(body["adapter"]["frames_dropped_epoch"], 0)
             ws.send_text(json.dumps({"type": "cancel", "epoch": 6}))
-            time.sleep(0.1)
-        body = self.client.get("/v1/sessions/s1/stats").json()
+            body = self._poll_until("s1", lambda b: b["epoch"] >= 6)
         self.assertEqual(body["epoch"], 6)
 
     def test_ws_unknown_session_rejected(self):
