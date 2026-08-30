@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liveavatar"
+version = "0.1.0"
+description = "Real-time streaming talking-head avatar: PCM audio in, MuseTalk lip-synced video out, published to LiveKit."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+]
+
+[project.optional-dependencies]
+livekit = ["livekit>=1.1"]
+vision = ["opencv-python"]
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
+inference = [
+    "torch",
+    "torchvision",
+    "diffusers",
+    "transformers",
+    "einops",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["src/liveavatar"]
+omit = ["src/liveavatar/musetalk/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["src/liveavatar/musetalk"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/liveavatar"]
+exclude = "musetalk[/\\\\]"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "liveavatar.musetalk.*"
+ignore_errors = true

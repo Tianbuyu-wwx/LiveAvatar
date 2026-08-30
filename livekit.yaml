@@ -1,0 +1,13 @@
+# LiveKit development server configuration.
+# Docs: https://docs.livekit.io/home/self-hosting/deployment/
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: false
+keys:
+  # Dev-only key pair. Change for any real deployment.
+  devkey: liveavatar-dev-secret

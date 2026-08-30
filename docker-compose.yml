@@ -1,0 +1,45 @@
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    ports:
+      - "7880:7880"          # signaling (HTTP/WebSocket)
+      - "7881:7881"          # RTC over TCP
+      - "50000-60000:50000-60000/udp"  # media over UDP
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+
+  liveavatar:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - livekit
+    environment:
+      # LiveKit (must match livekit.yaml keys)
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: liveavatar-dev-secret
+      LIVEKIT_ROOM: liveavatar
+      # Browser joins via this public URL (change to your host):
+      PUBLIC_LIVEKIT_URL: ws://localhost:7880
+      # Avatar inference
+      LIVEAVATAR_DEVICE: cuda
+      LIVEAVATAR_WHISPER_MODEL_PATH: /app/models/whisper
+      LIVEAVATAR_MUSETALK_MODEL_DIR: /app/models/musetalkV15
+      LIVEAVATAR_VAE_MODEL_DIR: /app/models/sd-vae-ft-mse
+      LIVEAVATAR_AVATAR_DATA_ROOT: /app/data/avatars
+      NVIDIA_VISIBLE_DEVICES: all
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+    # GPU (requires nvidia-container-toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
