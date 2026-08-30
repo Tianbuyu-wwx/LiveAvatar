@@ -31,89 +31,80 @@ if torch is not None:
         _pcm_s16le_to_float32,
     )
 
+    def _loud_pcm(samples: int = 640) -> bytes:
+        """Loud square-ish PCM (RMS well above silence threshold)."""
+        return b"\x00\x40" * samples
 
-def _loud_pcm(samples: int = 640) -> bytes:
-    """Loud square-ish PCM (RMS well above silence threshold)."""
-    return b"\x00\x40" * samples
+    def _silent_pcm(samples: int = 640) -> bytes:
+        return b"\x00\x00" * samples
 
+    class _FakeUNetModel:
+        dtype = torch.float32
 
-def _silent_pcm(samples: int = 640) -> bytes:
-    return b"\x00\x00" * samples
+        def __call__(self, latent, timesteps, encoder_hidden_states=None):
+            return types.SimpleNamespace(sample=latent)
 
+    class _FakeUnet:
+        def __init__(self) -> None:
+            self.model = _FakeUNetModel()
 
-class _FakeUNetModel:
-    dtype = torch.float32
+    class _FakePe:
+        def __call__(self, x):
+            return x
 
-    def __call__(self, latent, timesteps, encoder_hidden_states=None):
-        return types.SimpleNamespace(sample=latent)
+    class _FakeVae:
+        def decode_latents(self, latents):
+            import numpy as np
 
+            batch = latents.shape[0]
+            return np.zeros((batch, 64, 64, 3), dtype=np.uint8)
 
-class _FakeUnet:
-    def __init__(self) -> None:
-        self.model = _FakeUNetModel()
+    class _FakeAudioProcessor:
+        def audio2feat(self, audio_np):
+            import numpy as np
 
+            return np.zeros((max(1, audio_np.size // 320), 32), dtype=np.float32)
 
-class _FakePe:
-    def __call__(self, x):
-        return x
+        def feature2chunks(self, feature, fps, batch_size, audio_feat_length, start):
+            import numpy as np
 
+            return [np.zeros((8, 32), dtype=np.float32) for _ in range(batch_size)]
 
-class _FakeVae:
-    def decode_latents(self, latents):
+    def _fake_shared_models() -> dict:
+        return {
+            "vae": _FakeVae(),
+            "unet": _FakeUnet(),
+            "pe": _FakePe(),
+            "timesteps": torch.tensor([0]),
+            "audio_processor": _FakeAudioProcessor(),
+        }
+
+    def _make_avatar(tmp: str) -> AvatarAssets:
         import numpy as np
 
-        batch = latents.shape[0]
-        return np.zeros((batch, 64, 64, 3), dtype=np.uint8)
+        root = Path(tmp)
+        (root / "full_imgs").mkdir()
+        (root / "mask").mkdir()
+        with open(root / "coords.pkl", "wb") as f:
+            pickle.dump([(0, 0, 64, 64)], f)
+        with open(root / "mask_coords.pkl", "wb") as f:
+            pickle.dump([(0, 0, 64, 64)], f)
+        torch.save([torch.zeros(1, 4, 8, 8)], root / "latents.pt")
+        img = np.zeros((64, 64, 3), dtype=np.uint8)
+        img[:, :] = (9, 9, 9)
+        import cv2
 
-
-class _FakeAudioProcessor:
-    def audio2feat(self, audio_np):
-        import numpy as np
-
-        return np.zeros((max(1, audio_np.size // 320), 32), dtype=np.float32)
-
-    def feature2chunks(self, feature, fps, batch_size, audio_feat_length, start):
-        import numpy as np
-
-        return [np.zeros((8, 32), dtype=np.float32) for _ in range(batch_size)]
-
-
-def _fake_shared_models() -> dict:
-    return {
-        "vae": _FakeVae(),
-        "unet": _FakeUnet(),
-        "pe": _FakePe(),
-        "timesteps": torch.tensor([0]),
-        "audio_processor": _FakeAudioProcessor(),
-    }
-
-
-def _make_avatar(tmp: str) -> AvatarAssets:
-    import numpy as np
-
-    root = Path(tmp)
-    (root / "full_imgs").mkdir()
-    (root / "mask").mkdir()
-    with open(root / "coords.pkl", "wb") as f:
-        pickle.dump([(0, 0, 64, 64)], f)
-    with open(root / "mask_coords.pkl", "wb") as f:
-        pickle.dump([(0, 0, 64, 64)], f)
-    torch.save([torch.zeros(1, 4, 8, 8)], root / "latents.pt")
-    img = np.zeros((64, 64, 3), dtype=np.uint8)
-    img[:, :] = (9, 9, 9)
-    import cv2
-
-    cv2.imwrite(str(root / "full_imgs" / "0.jpg"), img)
-    cv2.imwrite(str(root / "mask" / "0.jpg"), np.zeros((64, 64, 3), dtype=np.uint8))
-    return AvatarAssets(
-        avatar_id="fake",
-        data_dir=str(root),
-        full_imgs_dir=str(root / "full_imgs"),
-        coords_path=str(root / "coords.pkl"),
-        latents_path=str(root / "latents.pt"),
-        mask_dir=str(root / "mask"),
-        mask_coords_path=str(root / "mask_coords.pkl"),
-    )
+        cv2.imwrite(str(root / "full_imgs" / "0.jpg"), img)
+        cv2.imwrite(str(root / "mask" / "0.jpg"), np.zeros((64, 64, 3), dtype=np.uint8))
+        return AvatarAssets(
+            avatar_id="fake",
+            data_dir=str(root),
+            full_imgs_dir=str(root / "full_imgs"),
+            coords_path=str(root / "coords.pkl"),
+            latents_path=str(root / "latents.pt"),
+            mask_dir=str(root / "mask"),
+            mask_coords_path=str(root / "mask_coords.pkl"),
+        )
 
 
 @unittest.skipIf(torch is None, "torch not installed")
