@@ -26,6 +26,14 @@ inference = [
     "transformers",
     "einops",
 ]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+    "httpx2",
+    "opencv-python-headless",
+    "ruff",
+    "mypy",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -52,7 +60,6 @@ extend-exclude = ["src/liveavatar/musetalk"]
 select = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.10"
 files = ["src/liveavatar"]
 exclude = "musetalk[/\\\\]"
 ignore_missing_imports = true

@@ -79,7 +79,7 @@ def load_wav_mono_16k(path: str) -> tuple[bytes, float]:
 
     audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
     if nchannels > 1:
-        audio = audio.reshape(-1, nchannels).mean(axis=1)
+        audio = audio.reshape(-1, nchannels).mean(axis=1).astype(np.float32)
 
     if framerate != 16000:
         duration = len(audio) / framerate
@@ -88,7 +88,7 @@ def load_wav_mono_16k(path: str) -> tuple[bytes, float]:
             np.linspace(0, len(audio) - 1, target_n),
             np.arange(len(audio)),
             audio,
-        )
+        ).astype(np.float32)
 
     return audio.astype(np.int16).tobytes(), nframes / framerate
 
