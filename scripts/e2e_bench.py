@@ -33,13 +33,13 @@ import time
 import httpx2 as httpx  # httpx2 is the dev-extra HTTP client (no httpx)
 import uvicorn
 from websockets.asyncio.client import connect as ws_connect
+from wsperf import StreamStats, _percentile
 
 from liveavatar.video_protocol import (
     FLAG_EPOCH_BOUNDARY,
     FLAG_KEYFRAME,
     unpack_video_frame,
 )
-from wsperf import StreamStats, _percentile
 
 _HOST = "127.0.0.1"
 _CHUNK_BYTES = 3200  # 100 ms of silence at 16 kHz S16LE mono
@@ -55,6 +55,7 @@ def _start_server(codec: str) -> tuple[uvicorn.Server, threading.Thread, int]:
     Mirrors ``demo_local.main`` so the bench drives the exact demo path.
     """
     from demo_local import _DemoPool
+
     from liveavatar.config import AvatarPoolConfig
     from liveavatar.pipeline import AvatarPipeline
     from liveavatar.publish import (
