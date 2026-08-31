@@ -206,7 +206,7 @@ async def _measure_latency(ws_base: str, http_base: str, avatar: str,
     first video frame arriving *after* it (one-way delay needs clock sync,
     this is the honest proxy the probe can measure on any host pair).
     """
-    import httpx
+    import httpx2 as httpx  # httpx2 is the dev-extra HTTP client (no httpx)
 
     async with httpx.AsyncClient() as http:
         sid = await _create_session(http, http_base, avatar)
@@ -298,7 +298,7 @@ class LanLatencyTests(unittest.TestCase):
 async def _run_soak(ws_base: str, http_base: str, avatar: str,
                     seconds: float) -> dict[str, dict]:
     """3 concurrent sessions streamed in real time; per-session report."""
-    import httpx
+    import httpx2 as httpx  # httpx2 is the dev-extra HTTP client (no httpx)
 
     out: dict[str, dict] = {}
     async with httpx.AsyncClient() as http:
@@ -410,7 +410,7 @@ def _decode_region_frame(canvas: np.ndarray | None, header, payload: bytes):
 async def _run_weak_network(server: _TestServer, lossy_s: float,
                             heal_s: float) -> dict:
     """5 % deterministic frame loss → degrade; heal → tier 0 ≤ 2 s."""
-    import httpx
+    import httpx2 as httpx  # httpx2 is the dev-extra HTTP client (no httpx)
 
     obs: dict = {
         "frames": 0,

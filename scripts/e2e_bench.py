@@ -30,7 +30,7 @@ import os
 import threading
 import time
 
-import httpx
+import httpx2 as httpx  # httpx2 is the dev-extra HTTP client (no httpx)
 import uvicorn
 from websockets.asyncio.client import connect as ws_connect
 
