@@ -15,10 +15,14 @@ from pathlib import Path
 try:
     import torch
 except ImportError:  # pragma: no cover — CI light env
-    torch = None  # type: ignore[assignment]
+    torch = None
 
-from liveavatar.musetalk.models.unet2d_compat import UNet2DConditionCompat
-from liveavatar.musetalk.models.vae_kl import AutoencoderKLCompat
+try:
+    from liveavatar.musetalk.models.unet2d_compat import UNet2DConditionCompat
+    from liveavatar.musetalk.models.vae_kl import AutoencoderKLCompat
+except ImportError:  # pragma: no cover — torch-dependent model modules
+    UNet2DConditionCompat = None  # type: ignore[assignment]
+    AutoencoderKLCompat = None  # type: ignore[assignment]
 
 requires_torch = unittest.skipUnless(torch is not None, "torch not installed")
 
@@ -263,3 +267,36 @@ def test_unet_skips_fully_consumed() -> None:
         # raise a channel-mismatch error.
         out = unet(sample, torch.tensor([0]), encoder_hidden_states=context)
     assert out.sample.shape == (1, 4, 32, 32)
+
+
+# ------------------------------------------------- package import hygiene
+
+
+def test_package_import_is_torch_free() -> None:
+    """``import liveavatar.musetalk`` must not pull torch/cv2 (PEP 562 lazy
+    re-exports).  Guards against a regression that would break test
+    collection in CI light environments."""
+    import os
+    import subprocess
+    import sys
+
+    src_dir = str(Path(__file__).resolve().parents[1] / "src")
+    env = dict(os.environ, PYTHONPATH=src_dir)
+    code = (
+        "import sys\n"
+        "for _m in ('torch', 'torchvision', 'cv2'):\n"
+        "    sys.modules[_m] = None\n"  # makes `import torch` raise ImportError
+        "import liveavatar.musetalk\n"
+        "assert liveavatar.musetalk.__all__ == [\n"
+        "    'Audio2Feature', 'get_image_blending', 'load_all_model']\n"
+        "print('ok')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().endswith("ok")

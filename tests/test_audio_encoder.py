@@ -29,11 +29,16 @@ except ImportError:  # pragma: no cover — CI light env
     reference_mel_filter_bank = None  # type: ignore[assignment]
     HAS_TRANSFORMERS = False
 
-from liveavatar.musetalk.models.whisper_encoder import (
-    WhisperEncoderCompat,
-    WhisperFeatureExtractorCompat,
-    mel_filterbank,
-)
+try:
+    from liveavatar.musetalk.models.whisper_encoder import (
+        WhisperEncoderCompat,
+        WhisperFeatureExtractorCompat,
+        mel_filterbank,
+    )
+except ImportError:  # pragma: no cover — torch-dependent model module
+    WhisperEncoderCompat = None  # type: ignore[assignment]
+    WhisperFeatureExtractorCompat = None  # type: ignore[assignment]
+    mel_filterbank = None  # type: ignore[assignment]
 
 requires_torch = unittest.skipUnless(torch is not None, "torch not installed")
 requires_transformers = unittest.skipUnless(
