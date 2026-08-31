@@ -31,6 +31,7 @@ inference = [
 dev = [
     "pytest>=8",
     "pytest-cov",
+    "pytest-timeout",
     "httpx2",
     "websockets>=12",
     "opencv-python-headless",

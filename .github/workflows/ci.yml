@@ -32,7 +32,9 @@ jobs:
         run: mypy
 
       - name: Tests with coverage
-        run: pytest --cov --cov-report=term-missing --cov-fail-under=80
+        # A stalled test fails after 120 s (with stack in the log) instead of
+        # hanging the job until the runner limit.
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=80 --timeout=120 --faulthandler-timeout=90
 
   web-syntax:
     # The browser demo is dependency-free vanilla JS (no build chain), so a
