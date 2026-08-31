@@ -198,8 +198,11 @@ async def _run_session(http, base: str, ws_base: str, seconds: int) -> dict:
 
 
 def _gates(sessions: list[dict]) -> dict:
-    interrupt = [s["interrupt_latency_ms"] for s in sessions
-                 if "interrupt_latency_ms" in s]
+    interrupt = [
+        s["interrupt_latency_ms"]
+        for s in sessions
+        if s.get("interrupt_latency_ms") is not None
+    ]
     fps_vals = [s["fps"] for s in sessions]
     interrupt_p95 = _percentile(sorted(interrupt), 95) if interrupt else None
     return {

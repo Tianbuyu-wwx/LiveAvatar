@@ -2,6 +2,16 @@
 
 所有显著变更记录于此。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — M-D：会话令牌接入服务
+
+### Changed
+- 会话令牌从「纯库函数」接入发布服务（M-C 任务 17 收尾）：`LIVEAVATAR_API_SECRET`（+ `LIVEAVATAR_TOKEN_TTL_S`）设置后，`POST /v1/sessions` 响应附带短 TTL HS256 `session_token`；WS 握手可用 `?token=` / `X-Session-Token` / `Authorization: Bearer` 代替静态 API_KEY，`sub` 必须匹配会话 ID、`scope` 必须为 `session`。web demo 自动改用 `session_token` 连接 WS。
+- `scripts/capacity_report.py` 门禁纯函数（fps 下限 / 打断 ≤ 90ms / 零饥饿）与 markdown 渲染补齐单测。
+
+### Added
+- `tests/test_session_token_auth.py`（13 项）：签发声明校验、TTL 生效、query/Bearer/X-Session-Token 三种携带方式、串会话/篡改/过期/错误 scope 拒绝、静态密钥兼容、env 读取。
+- `tests/test_capacity_scaffold.py`（6 项）：容量门禁逻辑与报告渲染。
+
 ## [Unreleased] — M-C：移除 LiveKit
 
 ### Removed

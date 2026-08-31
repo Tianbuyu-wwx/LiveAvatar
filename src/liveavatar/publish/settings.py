@@ -16,6 +16,13 @@ class PublishSettings:
     # (local dev / tests). When set, requests must present it via the
     # ``X-API-Key`` header (REST) or ``api_key`` query param / header (WS).
     api_key: str = ""
+    # HMAC secret for short-lived session tokens (M-D task 17). When set
+    # (together with api_key), POST /v1/sessions mints a per-session HS256
+    # token that WS handshakes may present instead of the static key —
+    # leaked browser credentials then expire after ``token_ttl_s``.
+    api_secret: str = ""
+    # Session-token TTL in seconds (only used when api_secret is set).
+    token_ttl_s: int = 300
     # Maximum concurrent sessions (DoS guard for the GPU lease pool).
     max_sessions: int = 16
     # Maximum WebSocket binary frame size in bytes (PCM chunks are ~KB).
@@ -37,6 +44,8 @@ class PublishSettings:
         return cls(
             codec=codec,
             api_key=os.getenv("LIVEAVATAR_API_KEY", ""),
+            api_secret=os.getenv("LIVEAVATAR_API_SECRET", ""),
+            token_ttl_s=int(os.getenv("LIVEAVATAR_TOKEN_TTL_S", "300")),
             max_sessions=int(os.getenv("LIVEAVATAR_MAX_SESSIONS", "16")),
             max_ws_frame_bytes=int(
                 os.getenv("LIVEAVATAR_MAX_WS_FRAME_BYTES", "65536")

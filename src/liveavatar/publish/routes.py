@@ -60,15 +60,63 @@ def _check_auth(request: Request) -> JSONResponse | None:
     return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
-def _check_ws_auth(websocket: Any) -> bool:
-    """True when the WS handshake is authorized (or auth is disabled)."""
+def _mint_session_token(session_id: str) -> str | None:
+    """Short-lived per-session token (M-D), or None when not configured."""
+    secret = state.settings.api_secret
+    if not secret:
+        return None
+    from .tokens import make_session_token
+
+    return make_session_token(
+        api_key=state.settings.api_key,
+        api_secret=secret,
+        session_id=session_id,
+        ttl_s=state.settings.token_ttl_s,
+    )
+
+
+def _extract_bearer(websocket: Any) -> str | None:
+    token = websocket.query_params.get("token") or websocket.headers.get(
+        "x-session-token"
+    )
+    if token:
+        return token
+    auth = websocket.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return None
+
+
+def _check_ws_auth(websocket: Any, session_id: str | None = None) -> bool:
+    """True when the WS handshake is authorized (or auth is disabled).
+
+    Two credential paths: the static ``api_key`` (query param ``api_key``
+    or ``X-API-Key`` header) or a short-lived HS256 session token (query
+    param ``token``, ``X-Session-Token`` or ``Authorization: Bearer``)
+    whose ``sub`` claim matches ``session_id``.
+    """
     key = state.settings.api_key
-    if not key:
+    secret = state.settings.api_secret
+    if not key and not secret:
         return True
     provided = websocket.query_params.get("api_key") or websocket.headers.get(
         "x-api-key"
     )
-    return provided == key
+    if key and provided == key:
+        return True
+    if secret and session_id is not None:
+        token = _extract_bearer(websocket)
+        if token is not None:
+            from .tokens import verify_session_token
+
+            claims = verify_session_token(token, secret)
+            if (
+                claims is not None
+                and claims.get("sub") == session_id
+                and claims.get("scope") == "session"
+            ):
+                return True
+    return False
 
 
 app = FastAPI(title="LiveAvatar", version="0.1.0", lifespan=_lifespan)
@@ -122,10 +170,11 @@ async def list_avatars(request: Request) -> JSONResponse:
 async def create_session(
     request: Request, body: CreateSessionBody | None = None
 ) -> JSONResponse:
-    """Create a session: acquire the avatar lease and join the room.
+    """Create a session: acquire the avatar lease and open the video sink.
 
     Body (all optional): ``{"session_id": "...", "avatar_id": "yongen",
-    "mode": "push" | "duplex"}``.
+    "mode": "push" | "duplex"}``. When ``LIVEAVATAR_API_SECRET`` is set the
+    response also carries a short-lived ``session_token`` for WS handshakes.
     """
     unauthorized = _check_auth(request)
     if unauthorized is not None:
@@ -139,7 +188,8 @@ async def create_session(
         return JSONResponse({"error": "invalid avatar_id"}, status_code=400)
 
     if body.mode == "duplex":
-        return await _open_duplex_session(session_id, avatar_id)
+        duplex_resp = await _open_duplex_session(session_id, avatar_id)
+        return _with_session_token(duplex_resp, session_id)
 
     pipeline = await _ensure_pipeline()
 
@@ -155,7 +205,7 @@ async def create_session(
     except AvatarPoolError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
 
-    resp: dict[str, Any] = {
+    body_json: dict[str, Any] = {
         "session_id": session_id,
         "avatar_id": avatar_id,
         "mode": "push",
@@ -164,7 +214,21 @@ async def create_session(
         "sample_format": "s16le",
         "video_ws": f"/v1/sessions/{session_id}/video",
     }
-    return JSONResponse(resp)
+    return _with_session_token(JSONResponse(body_json), session_id)
+
+
+def _with_session_token(resp: JSONResponse, session_id: str) -> JSONResponse:
+    """Attach the per-session token to a 2xx session-creation response."""
+    token = _mint_session_token(session_id)
+    if token is None or not (200 <= resp.status_code < 300):
+        return resp
+    import json
+
+    raw = bytes(resp.body)  # JSONResponse renders to bytes at construction
+    data = json.loads(raw.decode())
+    data["session_token"] = token
+    resp.body = json.dumps(data).encode()
+    return resp
 
 
 @app.delete("/v1/sessions/{session_id}")

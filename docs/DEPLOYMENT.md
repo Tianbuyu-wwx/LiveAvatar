@@ -10,6 +10,11 @@ LiveAvatar 服务暴露 GPU 推理与 WebSocket 入口，公网部署前逐项�
   - REST：`X-API-Key: <key>` 请求头
   - WS：`?api_key=<key>` 查询参数或同名请求头
 - 未设置该变量时服务**完全开放**，仅限本机/内网调试。
+- **推荐**：同时设置 `LIVEAVATAR_API_SECRET=<另一个强随机密钥>` 启用短 TTL
+  会话令牌（默认 300s，`LIVEAVATAR_TOKEN_TTL_S` 可调）。此时 `POST /v1/sessions`
+  响应附带 `session_token`（HS256），浏览器 WS 改用 `?token=` / `X-Session-Token` /
+  `Authorization: Bearer` 携带，静态 API_KEY 不再下发到前端——泄漏凭据的影响
+  被限制在 TTL 窗口内。
 
 ## 2. 传输加密
 - 在反向代理（nginx/caddy）终止 TLS，对外仅暴露 `https://` 与 `wss://`。

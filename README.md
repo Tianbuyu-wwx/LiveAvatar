@@ -169,6 +169,8 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `LIVEAVATAR_VAE_MODEL_DIR` | `models/sd-vae-ft-mse` | VAE 目录 |
 | `LIVEAVATAR_MAX_LOADED_WORKERS` | `0` | 同时驻留的 worker 上限（超出按 LRU 卸载；0 = 不限制） |
 | `LIVEAVATAR_API_KEY` | *(空)* | 服务端共享密钥；非空时 REST/WS 需携带（`X-API-Key` 头或 WS `api_key` 参数） |
+| `LIVEAVATAR_API_SECRET` | *(空)* | 会话令牌 HS256 密钥；设置后创建会话响应附带短 TTL `session_token`，WS 可用 `?token=` / `X-Session-Token` / `Authorization: Bearer` 代替静态密钥 |
+| `LIVEAVATAR_TOKEN_TTL_S` | `300` | 会话令牌有效期（秒） |
 | `LIVEAVATAR_MAX_SESSIONS` | `16` | 并发会话上限（超出返回 429） |
 | `LIVEAVATAR_MAX_WS_FRAME_BYTES` | `65536` | WS 二进制帧上限（超限丢弃，防 DoS） |
 | `LIVEAVATAR_CODEC` | `mjpeg` | ws 传输编码：`mjpeg`（全帧）或 `region`（区域增量，需 avatar 的 `region.json`） |
@@ -288,7 +290,7 @@ third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练�
 
 安全漏洞请勿公开发 issue：通过仓库 **Security → Advisories** 私密披露，流程见 [SECURITY.md](SECURITY.md)。
 
-- **API 鉴权**：公网部署必须设置 `LIVEAVATAR_API_KEY`（REST 走 `X-API-Key` 头，WS 走同名查询参数或头）。留空 = 仅限本机开发。
+- **API 鉴权**：公网部署必须设置 `LIVEAVATAR_API_KEY`（REST 走 `X-API-Key` 头，WS 走同名查询参数或头）。留空 = 仅限本机开发。配合 `LIVEAVATAR_API_SECRET` 时服务改为签发短 TTL 会话令牌（浏览器只接触随时过期的 token，静态密钥不出服务端），见 `liveavatar/publish/tokens.py`。
 - **avatar 资产信任边界**：`coords.pkl` / `mask_coords.pkl`（pickle）与 `latents.pt` / 人脸 checkpoint（torch）反序列化可执行任意代码。请**只使用本机 `scripts/prepare_avatar.py` 与 R1 训练脚本产出的资产**，切勿加载来路不明的模型文件。代码侧已启用 `torch.load(weights_only=True)`（仅允许张量与原始类型）作为纵深防御。
 - **路径安全（S4）**：`avatar_id` 会拼进文件系统路径，服务端在会话创建与区域编码器处强制白名单 `^[A-Za-z0-9_-]+$`，路径穿越/分隔符/NUL 等载荷一律 400/422 拒绝。
 - **资源限制**：`LIVEAVATAR_MAX_WS_FRAME_BYTES`（默认 64 KB）限制单帧大小，`LIVEAVATAR_MAX_SESSIONS` 限制并发会话数。

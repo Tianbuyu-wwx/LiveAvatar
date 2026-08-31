@@ -28,7 +28,7 @@ async def audio_ws(websocket: WebSocket, session_id: str) -> None:
     synthesized PCM back as binary frames and pipeline events (asr/vad/
     eou/control/error) as JSON text frames.
     """
-    if not _check_ws_auth(websocket):
+    if not _check_ws_auth(websocket, session_id):
         await websocket.close(code=4401, reason="unauthorized")
         return
     duplex = state.duplex_sessions.get(session_id)
@@ -178,7 +178,7 @@ async def video_ws(websocket: WebSocket, session_id: str) -> None:
     ``ready`` message first. Client → server: JSON control messages
     (``hello`` / ``feedback`` / ``keyframe_request``).
     """
-    if not _check_ws_auth(websocket):
+    if not _check_ws_auth(websocket, session_id):
         await websocket.close(code=4401, reason="unauthorized")
         return
     # Duplex sessions carry their own sink; push sessions live on the

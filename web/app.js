@@ -30,7 +30,8 @@ function showCanvas(show) {
 
 function attachPlayer(sess) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const url = `${proto}://${location.host}${sess.video_ws}`;
+  const tokenQ = sess.session_token ? `?token=${encodeURIComponent(sess.session_token)}` : "";
+  const url = `${proto}://${location.host}${sess.video_ws}${tokenQ}`;
   player = new AvatarPlayer($("canvas"), {
     onStatus: (t) => setStatus(t),
   });
@@ -97,7 +98,7 @@ async function start() {
     }
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/v1/sessions/${sess.session_id}/audio`);
+    ws = new WebSocket(`${proto}://${location.host}/v1/sessions/${sess.session_id}/audio${sess.session_token ? `?token=${encodeURIComponent(sess.session_token)}` : ""}`);
     ws.binaryType = "arraybuffer";
     await new Promise((res, rej) => {
       ws.onopen = res;
