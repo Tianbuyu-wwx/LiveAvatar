@@ -222,13 +222,21 @@ class VideoWsInterruptTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200, resp.text)
         return resp.json()["session_id"]
 
-    def _recv_frames(self, video, n_max: int) -> list:
-        """Collect up to n_max binary wire frames (stops briefly after the
-        last one; the server paces with 0.5s timeouts so a short drain is
-        safe)."""
+    def _recv_frames(
+        self, video, n_max: int, per_msg_timeout: float = 5.0
+    ) -> list:
+        """Collect up to n_max binary wire frames.
+
+        ``receive()`` on the TestClient blocks forever, so each message is
+        awaited through a helper thread with a timeout: a stream that goes
+        idle before EOF (server paces with 0.5 s timeouts) simply stops the
+        drain instead of hanging the suite on slow runners.
+        """
         frames = []
         for _ in range(n_max):
-            msg = video.receive()
+            msg = self._receive_with_timeout(video, per_msg_timeout)
+            if msg is None:
+                break  # idle stream, no EOF yet — stop draining
             if msg.get("bytes") is None:
                 continue
             header, _ = unpack_video_frame(msg["bytes"])
@@ -236,6 +244,28 @@ class VideoWsInterruptTests(unittest.TestCase):
                 break
             frames.append(header)
         return frames
+
+    @staticmethod
+    def _receive_with_timeout(video, timeout: float):
+        import queue
+        import threading
+
+        q: queue.Queue = queue.Queue()
+
+        def _worker() -> None:
+            try:
+                q.put(video.receive())
+            except Exception as exc:  # surfaced in the caller thread
+                q.put(exc)
+
+        threading.Thread(target=_worker, daemon=True).start()
+        try:
+            result = q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     def test_interrupt_advances_epoch_with_boundary_keyframe(self) -> None:
         session_id = self._create_session()
