@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Tianbuyu-wwx/LiveAvatar/actions/workflows/ci.yml/badge.svg)](https://github.com/Tianbuyu-wwx/LiveAvatar/actions/workflows/ci.yml)
 
-**实时流式数字人口型视频生成 + 全双工对话星型架构**：PCM 音频进，MuseTalk 口型视频出，经自研 WebSocket 传输（默认）或 LiveKit 推到浏览器；duplex 模式下麦克风进、完整对话（ASR → LLM → TTS → 数字人视频）出。
+**实时流式数字人口型视频生成 + 全双工对话星型架构**：PCM 音频进，MuseTalk 口型视频出，经自研 WebSocket 传输推到浏览器；duplex 模式下麦克风进、完整对话（ASR → LLM → TTS → 数字人视频）出。
 
 LiveAvatar 从一个生产级全双工数字人系统中拆出视频生成全链路，做成独立、可嵌入的开源库 + 服务：
 
@@ -48,7 +48,7 @@ epoch 打断权威仍在 worker：`cancel` 控制消息触发 `advance_epoch`，
 - **有界队列反压**：TTS 永远是主时钟，avatar 推理跟不上时丢 chunk 而不是阻塞音频。
 - **降级链**：`MuseTalk 推理 → 连续 N 次失败自动切换 StaticAvatarWorker（静帧）→ 音频独播`，新 epoch 自动恢复主 worker。
 - **租约式角色池**：每个 avatar 的 face coords / latents / mask 只加载一次，租约 + TTL 回收 + FIFO 等待队列，多会话跨角色零串音。
-- **可插拔发布端**：自研 WS 传输（默认，零外部基础设施）或 LiveKit WebRTC（可选过渡）；另有本地 OpenCV 预览 / mp4 落盘（模式 B，零依赖）。
+- **可插拔发布端**：自研 WS 传输（零外部基础设施）；另有本地 OpenCV 预览 / mp4 落盘（模式 B，零依赖）。
 - **全双工星型架构（duplex）**：麦克风音频进 → VAD/EOU/ASR → LLM（OpenAI 兼容流式，分句降延迟）→ TTS（GPT-SoVITS VoicePool）→ 数字人视频，辐条全部可插拔；epoch 打断同时熔断音频与视频。
 - **自研视频传输（R2）**：26 字节帧头二进制协议（seq/epoch/pts/codec/flags），MJPEG 全帧与**区域独立帧**双编码（口型区域先验，带宽 ↓55–80%），帧独立可解码、任意丢帧不花屏。
 - **自适应质量**：客户端周期上报拥塞信号（丢帧率/码率），服务端 EWMA 聚合 + 5 档质量状态机，弱网"降画质不冻结"，恢复带迟滞不抖动。
@@ -58,7 +58,7 @@ epoch 打断权威仍在 worker：`cancel` 控制消息触发 `advance_epoch`，
 
 - Python ≥ 3.10
 - NVIDIA GPU（CUDA）用于 MuseTalk 推理；纯测试/编排/传输逻辑可在 CPU 上跑
-- 可选：LiveKit Server（`LIVEAVATAR_TRANSPORT=livekit` 过渡模式）、Docker + nvidia-container-toolkit
+- 可选：Docker + nvidia-container-toolkit
 
 ## 快速开始
 
@@ -102,7 +102,7 @@ python scripts/prepare_avatar.py \
 
 产出 `data/avatars/yongen/`（full_imgs / coords.pkl / latents.pt / mask/ / mask_coords.pkl）。默认带五点人脸对齐（`LANDMARK_BACKEND=mediapipe|self`，显著提升口型质量；自研 `self` 后端权重训练完成后将成为默认）。
 
-### 4. 模式 B：本地预览（无需 LiveKit）
+### 4. 模式 B：本地预览
 
 ```bash
 python -m liveavatar.preview --audio data/audio/yongen.wav --avatar yongen            # OpenCV 窗口实时预览
@@ -124,14 +124,6 @@ CPU 体验（无需 GPU 与模型，合成画面走完整服务代码路径）�
 ```bash
 python scripts/demo_local.py --port 8000            # MJPEG 全帧
 python scripts/demo_local.py --codec region --port 8000   # 区域增量编码
-```
-
-### LiveKit 过渡模式（可选，deprecated）
-
-```bash
-export LIVEAVATAR_TRANSPORT=livekit LIVEKIT_URL=ws://localhost:7880 \
-       LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=xxx
-uvicorn liveavatar.publish:app --host 0.0.0.0 --port 8000
 ```
 
 ### 全双工对话（duplex 模式）
@@ -179,7 +171,6 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `LIVEAVATAR_API_KEY` | *(空)* | 服务端共享密钥；非空时 REST/WS 需携带（`X-API-Key` 头或 WS `api_key` 参数） |
 | `LIVEAVATAR_MAX_SESSIONS` | `16` | 并发会话上限（超出返回 429） |
 | `LIVEAVATAR_MAX_WS_FRAME_BYTES` | `65536` | WS 二进制帧上限（超限丢弃，防 DoS） |
-| `LIVEAVATAR_TRANSPORT` | `ws` | 视频传输：`ws`（自研，默认）或 `livekit`（过渡，deprecated） |
 | `LIVEAVATAR_CODEC` | `mjpeg` | ws 传输编码：`mjpeg`（全帧）或 `region`（区域增量，需 avatar 的 `region.json`） |
 | `LIVEAVATAR_METRICS` | `off` | 置 `on` 启用 `GET /metrics`（Prometheus 文本格式：会话数/视频客户端/丢帧/编码错误/uptime） |
 | `LIVEAVATAR_ASR_URL` | *(空)* | duplex：RealtimeAsr 兼容 ASR 微服务 WS 地址（缺省用参考 ScriptedAsr） |
@@ -189,8 +180,6 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `LIVEAVATAR_VOICE_DEVICE` / `LIVEAVATAR_VOICE_IS_HALF` | `cuda` / `true` | VoicePool 推理设备与精度（`cpu` / `false` 即纯 CPU） |
 | `LIVEAVATAR_AEC` | `0` | duplex：启用纯 numpy NLMS 回声消除 |
 | `LIVEAVATAR_DUPLEX_AVATAR` | `0` | duplex：启用视频辐条（MuseTalk 生成口型视频） |
-
-服务端（`LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`LIVEKIT_ROOM`、`PUBLIC_LIVEKIT_URL`）仅 livekit 过渡模式需要，见 `liveavatar/publish/settings.py`。
 
 ## HTTP / WebSocket API
 
@@ -242,7 +231,7 @@ await pipeline.close_session("s1")
 await pipeline.stop()
 ```
 
-测试时可注入 fake `pool` / `publisher_factory`，300+ 个单测全部不依赖 torch / LiveKit / GPU。
+测试时可注入 fake `pool` / `publisher_factory`，300+ 个单测全部不依赖 torch / GPU。
 
 ## 目录结构
 
@@ -252,7 +241,7 @@ src/liveavatar/
 ├── publish/             # FastAPI 服务包（push/duplex 双模式）
 │   ├── routes.py            # REST 端点 + app 组装
 │   ├── ws_routes.py         # /audio + /video WS 端点
-│   ├── session_manager.py   # pipeline/voice-pool 生命周期 + duplex 会话 + LiveKit 房间
+│   ├── session_manager.py   # pipeline/voice-pool 生命周期 + duplex 会话
 │   ├── encoders.py          # 每会话发布器/编码器工厂 + avatar_id 校验
 │   ├── settings.py state.py tokens.py   # 配置 / 单例状态 / JWT 签发
 ├── duplex.py            # 全双工星型会话（WS 音频 ⇄ RealtimeWorker 辐条）
@@ -265,10 +254,6 @@ src/liveavatar/
 ├── tts.py               # NvcStreamingTtsAdapter（VoicePool → 流式 TTS）
 ├── runtime/             # 全双工星型架构核心
 │   ├── worker.py            # RealtimeWorker：VAD/EOU/ASR → LLM → TTS 中枢（epoch 权威）
-│   ├── livekit_runtime.py   # LiveKit 房间侧会话组装（过渡模式，多辐条租约管理）
-│   ├── livekit_adapter.py   # LiveKit 音轨 ⇄ PCMFrame 适配
-│   ├── tutor_publisher.py   # 合成语音发布到 LiveKit 教师轨（过渡模式）
-│   ├── control_channel.py   # 控制通道（打断/epoch 指令分发）
 │   ├── contracts.py         # 事件信封（Envelope）wire 协议
 │   ├── queues.py fake_tts.py metrics.py
 ├── voice/               # GPT-SoVITS VoicePool（NvcWorker 进程内推理 + 租约池）
@@ -283,7 +268,6 @@ src/liveavatar/
 ├── video_protocol.py    # 26B 帧头二进制协议 pack/unpack
 ├── region_codec.py      # 区域独立帧编码器（口型先验）
 ├── adaptive.py          # 反馈 EWMA + 5 档自适应质量状态机
-├── video_publisher.py   # BGR24 → I420 → LiveKit VideoSource（过渡）
 ├── face_backend.py      # 人脸检测/关键点双后端切换（self | legacy）
 ├── face_self.py         # 自研 TinyFaceDetector + LandmarkNet5Self（torch）
 ├── face_landmarks.py    # 5 点关键点对齐（训练/推理共享）
@@ -292,7 +276,7 @@ src/liveavatar/
 ├── _common/             # 跨事件循环队列 / 租约/泛型池原语
 └── musetalk/            # MuseTalk 模型定义（自包含）
 scripts/                 # download_models / download_gptsovits / prepare_avatar /
-                         # demo_local / wsperf / e2e_bench /
+                         # demo_local / wsperf / e2e_bench / capacity_report /
                          # make_face_dataset / face_align / train_face_det /
                          # train_face_landmarks / accept_face_backend
 web/                     # 浏览器 demo（无构建，原生 JS：player.js 抖动缓冲 + canvas 合成）
@@ -330,7 +314,6 @@ third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练�
 | [YuNet](https://github.com/opencv/opencv_zoo) | Apache-2.0 | 人脸检测（过渡期默认后端，单个 onnx 资源文件） |
 | [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) | MIT | TTS 辐条（duplex 模式，`third_party/GPT_SoVITS`，可选依赖） |
 | [MediaPipe](https://developers.google.com/mediapipe) | Apache-2.0 | 训练期教师标注专用（`teacher` extra），非运行依赖 |
-| [LiveKit](https://livekit.io/) | Apache-2.0 | 实时传输（可选过渡依赖，deprecated） |
 | MuseTalk demo 数据（yongen） | — | **仅限非商业研究用途**，来源见上游仓库 |
 
 使用数字人生成内容时请遵守当地法律法规，不得用于伪造他人身份等用途。

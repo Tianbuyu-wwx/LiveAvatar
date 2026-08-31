@@ -133,7 +133,7 @@ class DuplexSession:
         self.metrics = metrics or SessionMetrics(session_id)
         self.lease_renew_interval = lease_renew_interval
 
-        # ── Spoke resolution (shared with LiveKitWorkerRuntime) ─────
+        # ── Spoke resolution (shared with runtime assemblies) ────────
         remote = resolve_remote_asr(self.settings.asr_url, session_id, logger=logger)
         self._asr_client: Any = remote.client if remote else None
         remote_vad = remote.vad if remote else None

@@ -2,6 +2,20 @@
 
 所有显著变更记录于此。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — M-C：移除 LiveKit
+
+### Removed
+- **LiveKit 全面移除**（M-C）：删除 `runtime/livekit_runtime.py`、`runtime/livekit_adapter.py`、`runtime/tutor_publisher.py`、`video_publisher.py`、`livekit.yaml` 与 `tests/test_transport_flag.py`；`pyproject.toml` 移除 `livekit` extra 与覆盖豁免；Dockerfile/docker-compose/README/DEPLOYMENT 同步清理。
+- 环境变量 `LIVEAVATAR_TRANSPORT` 与 `LIVEKIT_*` 不再被读取（自研 WS 传输是唯一传输）。
+
+### Changed
+- 会话令牌：原 LiveKit access token 迁移为自研 HS256 session token（`publish.tokens.make_session_token` / `verify_session_token`，短 TTL + `scope`/`sub` 声明）。
+- web demo 移除 livekit-client 脚本与房间分支，统一走自研 WS 传输（canvas 渲染）。
+
+### Added
+- 无 livekit 引用守卫测试（`tests/test_no_livekit.py`）：源码树与依赖清单出现 livekit 即失败。
+- 三路并发正确性测试（`tests/test_concurrency3.py`，fake worker，CPU）：会话隔离、独立 seq、打断互不串扰、单会话关闭不影响他路。
+
 ## [0.4.0] - 2026-08-31
 
 ### Added — 全双工星型架构（duplex 模式）

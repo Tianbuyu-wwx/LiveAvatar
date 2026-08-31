@@ -7,7 +7,7 @@ Usage::
 
 The renderer feeds the entire PCM to the worker in one call; the worker's
 offline path (long-audio branch of ``_infer_batch``) renders every frame
-with correct per-frame temporal audio features. No LiveKit required.
+with correct per-frame temporal audio features. Fully offline (no WS service).
 """
 
 from __future__ import annotations

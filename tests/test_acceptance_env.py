@@ -80,9 +80,7 @@ class _TestServer:
         )
 
         self._tmp = tempfile.TemporaryDirectory() if codec == "region" else None
-        state.settings = PublishSettings(
-            livekit_url="", livekit_api_key="", livekit_api_secret=""
-        )
+        state.settings = PublishSettings()
         state.settings.codec = codec
         if codec == "region":
             from liveavatar.region_codec import RegionSpec, write_region_json

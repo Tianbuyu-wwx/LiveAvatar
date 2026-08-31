@@ -1,8 +1,7 @@
 /* LiveAvatar web demo:
-   1. POST /v1/sessions → {session_id, token, url, video_ws}
-   2. If the session exposes video_ws (self-developed transport), render the
-      /v1/sessions/{id}/video stream onto a canvas via AvatarPlayer;
-      otherwise join the LiveKit room with the token.
+   1. POST /v1/sessions → {session_id, video_ws}
+   2. Render the /v1/sessions/{id}/video stream onto a canvas via
+      AvatarPlayer (self-developed WS transport).
    3. Stream the selected wav over WS /v1/sessions/{id}/audio in ~100ms chunks
       paced at real time; "打断" sends {"type":"cancel"} with a bumped epoch. */
 
@@ -13,7 +12,6 @@ const statusEl = $("status");
 const vstatsEl = $("vstats");
 
 let ws = null;
-let room = null;
 let player = null;
 let actx = null;
 let sessionId = null;
@@ -73,26 +71,9 @@ async function start() {
     const sess = await resp.json();
     sessionId = sess.session_id;
 
-    // 2. Video: self-developed transport when available, else LiveKit.
-    if (sess.video_ws) {
-      setStatus("连接视频流（自研传输）…");
-      await attachPlayer(sess);
-    } else {
-      setStatus("连接 LiveKit…");
-      room = new LivekitClient.Room({
-        adaptiveStream: true,
-        dynacast: true,
-        videoCaptureDefaults: { resolution: { width: 512, height: 512 } },
-      });
-      room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
-        if (track.kind === "video") {
-          showCanvas(false);
-          $("video").style.display = "block";
-          track.attach($("video"));
-        }
-      });
-      await room.connect(sess.url, sess.token);
-    }
+    // 2. Video: self-developed WS transport.
+    setStatus("连接视频流…");
+    await attachPlayer(sess);
 
     // 3. Stream the wav over WS in real time.
     setStatus("推流中…");
@@ -180,10 +161,6 @@ async function teardown() {
     player = null;
     showCanvas(false);
     vstatsEl.textContent = "";
-  }
-  if (room) {
-    await room.disconnect();
-    room = null;
   }
   // Release the server-side session immediately (avoids waiting for TTL reap).
   if (sessionId) {

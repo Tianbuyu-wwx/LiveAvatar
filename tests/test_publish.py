@@ -1,7 +1,7 @@
 """Tests for the publish service (FastAPI) using TestClient.
 
-Runs in capture mode (no LiveKit env) — sessions capture frames on the
-adapter instead of publishing to a room.
+Runs in capture mode (no publisher factory) — sessions capture frames on
+the adapter instead of publishing to a sink.
 """
 
 from __future__ import annotations
@@ -18,8 +18,9 @@ from liveavatar.pipeline import AvatarPipeline
 from liveavatar.publish import (
     PublishSettings,
     app,
-    make_access_token,
+    make_session_token,
     state,
+    verify_session_token,
 )
 from liveavatar.worker import AvatarAssets, AvatarWorker
 from tests.conftest import pcm as _pcm
@@ -41,19 +42,23 @@ class _FakeLease:
 
 
 class _FakeServicePool:
-    """AvatarPool-compatible fake for service tests (no GPU, no files)."""
+    """AvatarPool-compatible fake for service tests (no GPU, no files).
+
+    Each lease gets a fresh worker: the real lease pool gives a session
+    exclusive ownership of the avatar worker, so a shared instance here
+    would break concurrent-session tests (asyncio.Lock bound to the first
+    session's event loop).
+    """
 
     def __init__(self) -> None:
-        self._worker = _ServiceWorker(
-            AvatarAssets(
-                avatar_id="yongen",
-                data_dir="avatars/yongen",
-                full_imgs_dir="avatars/yongen/full_imgs",
-                coords_path="avatars/yongen/coords.pkl",
-                latents_path="avatars/yongen/latents.pt",
-                mask_dir="avatars/yongen/mask",
-                mask_coords_path="avatars/yongen/mask_coords.pkl",
-            )
+        self._assets = AvatarAssets(
+            avatar_id="yongen",
+            data_dir="avatars/yongen",
+            full_imgs_dir="avatars/yongen/full_imgs",
+            coords_path="avatars/yongen/coords.pkl",
+            latents_path="avatars/yongen/latents.pt",
+            mask_dir="avatars/yongen/mask",
+            mask_coords_path="avatars/yongen/mask_coords.pkl",
         )
 
     @property
@@ -67,7 +72,7 @@ class _FakeServicePool:
         pass
 
     async def acquire(self, session_id: str, avatar_id: str, **kwargs) -> _FakeLease:
-        return _FakeLease(self._worker)
+        return _FakeLease(_ServiceWorker(self._assets))
 
     async def release_async(self, session_id: str) -> bool:
         return True
@@ -77,10 +82,8 @@ class _FakeServicePool:
 
 
 def _configure_capture_mode() -> None:
-    """Point the app at capture mode: no LiveKit, fake pool, no files."""
-    state.settings = PublishSettings(
-        livekit_url="", livekit_api_key="", livekit_api_secret=""
-    )
+    """Point the app at capture mode: no auth, fake pool, no files."""
+    state.settings = PublishSettings()
     state.pipeline = AvatarPipeline(
         AvatarPoolConfig(avatar_data_root="/nonexistent"),
         pool=_FakeServicePool(),
@@ -127,7 +130,6 @@ class TestHealthAndAvatars(PublishTestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["status"], "ok")
-        self.assertFalse(body["livekit"])
 
     def test_avatars_empty_root(self):
         resp = self.client.get("/v1/avatars")
@@ -137,10 +139,12 @@ class TestHealthAndAvatars(PublishTestCase):
         self.assertEqual(body["data_root"], "/nonexistent")
 
 
-class TestToken(unittest.TestCase):
+class TestSessionToken(unittest.TestCase):
+    """Session-token signing (M-C task 17 base): HS256 + short TTL."""
+
     def test_token_is_hs256_jwt(self):
-        token = make_access_token(
-            api_key="devkey", api_secret="secret", identity="u1", room="demo"
+        token = make_session_token(
+            api_key="devkey", api_secret="secret", session_id="u1"
         )
         header_b64, payload_b64, sig = token.split(".")
         header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
@@ -149,13 +153,30 @@ class TestToken(unittest.TestCase):
         self.assertEqual(header["typ"], "JWT")
         self.assertEqual(payload["iss"], "devkey")
         self.assertEqual(payload["sub"], "u1")
-        self.assertTrue(payload["video"]["roomJoin"])
-        self.assertEqual(payload["video"]["room"], "demo")
+        self.assertEqual(payload["scope"], "session")
 
-    def test_token_deterministic_per_identity(self):
-        t1 = make_access_token(api_key="k", api_secret="s", identity="a", room="r")
-        t2 = make_access_token(api_key="k", api_secret="s", identity="b", room="r")
+    def test_token_deterministic_per_session(self):
+        t1 = make_session_token(api_key="k", api_secret="s", session_id="a")
+        t2 = make_session_token(api_key="k", api_secret="s", session_id="b")
         self.assertNotEqual(t1, t2)
+
+    def test_verify_roundtrip_and_expiry(self):
+        token = make_session_token(
+            api_key="k", api_secret="s", session_id="u1", ttl_s=60
+        )
+        claims = verify_session_token(token, "s")
+        self.assertIsNotNone(claims)
+        self.assertEqual(claims["sub"], "u1")
+        # Wrong secret → None.
+        self.assertIsNone(verify_session_token(token, "wrong"))
+        # Tampered payload → None.
+        head, _, sig = token.split(".")
+        self.assertIsNone(verify_session_token(f"{head}.eyJzdWIiOiJ4In0.{sig}", "s"))
+        # Expired → None.
+        expired = make_session_token(
+            api_key="k", api_secret="s", session_id="u1", ttl_s=-10
+        )
+        self.assertIsNone(verify_session_token(expired, "s"))
 
 
 class TestSessions(PublishTestCase):
@@ -165,9 +186,9 @@ class TestSessions(PublishTestCase):
         body = resp.json()
         self.assertEqual(body["session_id"], "s1")
         self.assertEqual(body["avatar_id"], "yongen")  # default placeholder
-        self.assertFalse(body["livekit"])
+        self.assertEqual(body["transport"], "ws")
         self.assertEqual(body["sample_rate"], 16000)
-        self.assertNotIn("token", body)  # no livekit → no token
+        self.assertEqual(body["video_ws"], "/v1/sessions/s1/video")
 
     def test_create_session_generates_id(self):
         resp = self.client.post("/v1/sessions", json={})

@@ -8,7 +8,7 @@ Switches (priority: explicit argument > environment variable > default):
 The legacy backends (OpenCV YuNet / MediaPipe FaceLandmarker) stay the
 default until the self-developed weights pass the M4 downstream-consistency
 acceptance; they will be removed after a two-minor-version transition (same
-convention as the LiveKit transport switch). Neither is a runtime dependency:
+convention as the codec switch). Neither is a runtime dependency:
 - YuNet is a single ``.onnx`` resource file on top of the retained OpenCV;
 - MediaPipe is imported lazily and is only needed as the *training-time
   teacher* (pseudo-labeling own material) or with the optional ``teacher``

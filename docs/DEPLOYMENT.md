@@ -2,8 +2,8 @@
 
 LiveAvatar 服务暴露 GPU 推理与 WebSocket 入口，公网部署前逐项确认。
 
-> 默认视频传输为自研 WS 传输（`LIVEAVATAR_TRANSPORT=ws`）：只需暴露本服务的
-> 443（反向代理），**无需部署 LiveKit**。若仍使用 `livekit` 过渡模式，见文末附注。
+> 默认视频传输为自研 WS 传输：只需暴露本服务的 443（反向代理），
+> 无需任何额外传输基础设施。
 
 ## 1. 鉴权（必做）
 - 设置 `LIVEAVATAR_API_KEY=<强随机密钥>`，所有 REST/WS 请求需携带：
@@ -36,9 +36,3 @@ LiveAvatar 服务暴露 GPU 推理与 WebSocket 入口，公网部署前逐项�
 ## 6. 内容合规
 - demo avatar（yongen）数据仅限研究用途，商用前替换为自备素材。
 - 遵守所在地深度合成（deepfake）法规；对外产品建议加可见/隐式水印。
-
-## 附注：livekit 过渡模式
-
-`LIVEAVATAR_TRANSPORT=livekit` 时还需：LiveKit Server 启用 wss（生产用正式密钥，
-勿用 `livekit.yaml` 中的 dev 密钥）；GPU 服务器与 LiveKit 之间走内网或 VPN。
-该模式已 deprecated，计划两个小版本后移除。

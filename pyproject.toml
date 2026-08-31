@@ -16,9 +16,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# DEPRECATED since 0.4.0 — the self-developed ws transport is the default.
-# Kept for a transition period (removal planned after two minor releases).
-livekit = ["livekit>=1.1"]
 vision = ["opencv-python"]
 server = ["fastapi>=0.110", "uvicorn>=0.29"]
 inference = [
@@ -61,13 +58,6 @@ omit = [
     # env (skipUnless(torch)), so exclude them from the coverage gate too.
     "src/liveavatar/face_self.py",
     "src/liveavatar/face_landmarks.py",
-    # Deprecated LiveKit transition mode (R2): requires a livekit server +
-    # SDK at runtime; the light CI env intentionally has neither, so these
-    # paths cannot be exercised there. Covered by real-room integration runs.
-    "src/liveavatar/runtime/livekit_adapter.py",
-    "src/liveavatar/runtime/livekit_runtime.py",
-    "src/liveavatar/runtime/tutor_publisher.py",
-    "src/liveavatar/runtime/control_channel.py",
 ]
 
 [tool.coverage.report]

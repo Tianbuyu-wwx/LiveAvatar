@@ -19,8 +19,7 @@ COPY src/ ./src/
 RUN pip install --no-deps . \
     && pip install "fastapi>=0.110" "uvicorn>=0.29" \
         "opencv-python" "diffusers" "transformers" "einops" \
-        "numpy" "pydantic>=2" "pydantic-settings>=2" "huggingface_hub" \
-        "livekit>=1.1"
+        "numpy" "pydantic>=2" "pydantic-settings>=2" "huggingface_hub"
 
 # Demo page + scripts.
 COPY web/ ./web/

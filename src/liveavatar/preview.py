@@ -1,6 +1,6 @@
 """Local preview (mode B): wav file → MuseTalk avatar → window / mp4.
 
-No LiveKit required. Joins the avatar pool, streams the wav through the
+No WS service required. Joins the avatar pool, streams the wav through the
 pipeline in real time and renders the produced frames with OpenCV.
 
 Examples::
@@ -35,9 +35,8 @@ from .worker import AvatarFrame
 class PreviewSink:
     """Publisher-compatible sink that buffers frames for the display loop.
 
-    Implements the AvatarVideoPublisher surface used by the adapter
-    (``publish_frame`` / ``cancel_epoch`` / ``current_epoch``) without any
-    LiveKit dependency.
+    Implements the publisher surface used by the adapter (``publish_frame``
+    / ``cancel_epoch`` / ``current_epoch``) without any external dependency.
     """
 
     def __init__(self, maxlen: int = 256) -> None:

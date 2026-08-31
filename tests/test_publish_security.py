@@ -7,7 +7,7 @@ import json
 import time
 import unittest
 
-from liveavatar.publish import make_access_token, state
+from liveavatar.publish import state
 from tests.test_publish import PublishTestCase, _pcm
 
 
@@ -214,25 +214,26 @@ class TestWsFrameLimit(PublishTestCase):
             state.settings.max_ws_frame_bytes = 65536
 
 
-class TestBrowserTokenSubscribeOnly(unittest.TestCase):
-    def test_can_publish_false(self):
-        token = make_access_token(
-            api_key="k",
-            api_secret="s",
-            identity="viewer",
-            room="r",
-            can_publish=False,
+class TestSessionTokenScope(unittest.TestCase):
+    """Session tokens (M-C task 17 base) carry an explicit scope claim."""
+
+    def test_scope_claim(self):
+        from liveavatar.publish import make_session_token
+
+        token = make_session_token(
+            api_key="k", api_secret="s", session_id="viewer", scope="session"
         )
         payload_b64 = token.split(".")[1]
         payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=="))
-        self.assertFalse(payload["video"]["canPublish"])
-        self.assertFalse(payload["video"]["canPublishData"])
-        self.assertTrue(payload["video"]["canSubscribe"])
+        self.assertEqual(payload["scope"], "session")
+        self.assertEqual(payload["sub"], "viewer")
 
-    def test_default_token_can_publish(self):
-        token = make_access_token(api_key="k", api_secret="s", identity="bot", room="r")
+    def test_default_scope_is_session(self):
+        from liveavatar.publish import make_session_token
+
+        token = make_session_token(api_key="k", api_secret="s", session_id="bot")
         payload = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))
-        self.assertTrue(payload["video"]["canPublish"])
+        self.assertEqual(payload["scope"], "session")
 
 
 class TestStaticServing(PublishTestCase):

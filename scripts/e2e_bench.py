@@ -66,9 +66,7 @@ def _start_server(codec: str) -> tuple[uvicorn.Server, threading.Thread, int]:
     )
     from liveavatar.region_codec import RegionSpec, write_region_json
 
-    state.settings = PublishSettings(
-        livekit_url="", livekit_api_key="", livekit_api_secret=""
-    )
+    state.settings = PublishSettings()
     state.settings.codec = codec
     if codec == "region":
         avatar_dir = os.path.join("data", "avatars", "yongen")

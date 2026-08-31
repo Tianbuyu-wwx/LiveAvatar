@@ -5,7 +5,7 @@ resolution of the :class:`~liveavatar.runtime.worker.RealtimeWorker` spokes:
 the remote ASR trio (VAD/EOU/ASR), NLMS AEC, voice pool + streaming TTS,
 avatar pool + streaming adapter, and the LLM text source.
 
-``DuplexSession`` and ``LiveKitWorkerRuntime`` used to carry near-identical
+``DuplexSession`` and the former worker runtime used to carry near-identical
 import-guard + warning + construction blocks; both now delegate here so the
 resolution rules can never drift apart. Every resolver degrades to ``None``
 (with a warning) instead of raising when an optional extra is missing.

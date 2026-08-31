@@ -67,21 +67,10 @@ def _ws_sink_for(avatar_id: str) -> Any:
 
 
 def _service_publisher_factory(session: SessionState) -> Any:
-    """Create the per-session video publisher for the service.
+    """Create the per-session video publisher (self-developed transport).
 
-    - LiveKit session (local_participant present) → LiveKit track publisher.
-    - Otherwise → self-developed WebSocketSink (R2 transport): frames are
-      encoded and fanned out to ``/v1/sessions/{sid}/video`` consumers.
+    Every session gets a WebSocketSink served at
+    ``/v1/sessions/{sid}/video`` with the configured codec (region →
+    fallback MJPEG when the avatar has no region.json).
     """
-    if getattr(session, "local_participant", None) is not None:
-        from ..video_publisher import AvatarVideoPublisher
-
-        cfg = state.pool_config
-        return AvatarVideoPublisher(
-            session.local_participant,
-            session.session_id,
-            width=cfg.width,
-            height=cfg.height,
-            target_fps=cfg.target_fps,
-        )
     return _ws_sink_for(session.avatar_id)

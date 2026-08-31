@@ -1,4 +1,4 @@
-"""Session lifecycle: pipeline/voice-pool start, duplex sessions, LiveKit room."""
+"""Session lifecycle: pipeline/voice-pool start, duplex sessions."""
 
 from __future__ import annotations
 
@@ -12,18 +12,8 @@ from ..pool import discover_avatars
 from .encoders import _service_publisher_factory
 from .encoders import _ws_sink_for as _duplex_video_sink
 from .state import state
-from .tokens import make_access_token
 
 logger = logging.getLogger("liveavatar.publish")
-
-# Optional LiveKit RTC SDK (only needed when publishing into a room).
-try:
-    from livekit import rtc  # type: ignore
-
-    _HAS_LIVEKIT = True
-except Exception:  # pragma: no cover
-    _HAS_LIVEKIT = False
-    rtc = None  # type: ignore
 
 
 async def _ensure_pipeline() -> AvatarPipeline:
@@ -104,28 +94,6 @@ async def _open_duplex_session(session_id: str, avatar_id: str) -> Any:
     if sink is not None:
         resp["video_ws"] = f"/v1/sessions/{session_id}/video"
     return JSONResponse(resp)
-
-
-async def _join_room(session_id: str) -> tuple[Any, Any]:
-    """Join the LiveKit room as the avatar publisher bot.
-
-    Returns (room, local_participant). Raises RuntimeError when the LiveKit
-    SDK or configuration is missing.
-    """
-    if not _HAS_LIVEKIT:
-        raise RuntimeError(
-            "livekit package not installed; pip install 'liveavatar[livekit]'"
-        )
-    settings = state.settings
-    token = make_access_token(
-        api_key=settings.livekit_api_key,
-        api_secret=settings.livekit_api_secret,
-        identity=f"avatar-{session_id}",
-        room=settings.livekit_room,
-    )
-    room = rtc.Room()
-    await room.connect(settings.livekit_url, token)
-    return room, room.local_participant
 
 
 def _default_avatar_id() -> str:

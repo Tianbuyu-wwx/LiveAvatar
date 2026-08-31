@@ -376,9 +376,7 @@ class VideoWsRegionCodecTests(unittest.TestCase):
         from liveavatar.region_codec import RegionSpec, write_region_json
 
         self._tmp = tempfile.TemporaryDirectory()
-        state.settings = state.settings.__class__(
-            livekit_url="", livekit_api_key="", livekit_api_secret=""
-        )
+        state.settings = state.settings.__class__()
         state.settings.codec = "region"
         state.pool_config = AvatarPoolConfig(avatar_data_root=self._tmp.name)
         # Fake avatar dir with a region.json (fake worker emits 4x4 frames).

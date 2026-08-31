@@ -18,7 +18,7 @@ Two construction modes
 
 2. **Pool mode**: pass a ``VoicePool`` + ``session_id`` + ``char_id``.
    The adapter acquires/releases the lease via ``acquire()`` / ``release()``.
-   Used by ``LiveKitWorkerRuntime`` which owns the session lifecycle.
+   Used by the full-duplex session runtime which owns the session lifecycle.
 
 Sync vs async trade-off
 -----------------------

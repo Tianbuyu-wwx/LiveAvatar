@@ -16,12 +16,10 @@ from .encoders import _valid_avatar_id
 from .session_manager import (
     _default_avatar_id,
     _ensure_pipeline,
-    _join_room,
     _lifespan,
     _open_duplex_session,
 )
 from .state import state
-from .tokens import make_access_token
 
 logger = logging.getLogger("liveavatar.publish")
 
@@ -78,7 +76,7 @@ app = FastAPI(title="LiveAvatar", version="0.1.0", lifespan=_lifespan)
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    return JSONResponse({"status": "ok", "livekit": state.settings.livekit_enabled})
+    return JSONResponse({"status": "ok"})
 
 
 @app.get("/metrics")
@@ -150,65 +148,22 @@ async def create_session(
             {"error": "session limit reached"}, status_code=429
         )
 
-    # Transport selection: "livekit" joins the room as a publisher bot;
-    # "ws" (default) leaves publisher creation to the service factory,
-    # which installs a WebSocketSink served at /v1/sessions/{sid}/video.
-    use_livekit = False
-    room = participant = None
-    if state.settings.transport == "livekit":
-        if not state.settings.livekit_enabled:
-            return JSONResponse(
-                {
-                    "error": "transport=livekit requires LIVEKIT_URL, "
-                    "LIVEKIT_API_KEY and LIVEKIT_API_SECRET"
-                },
-                status_code=503,
-            )
-        try:
-            room, participant = await _join_room(session_id)
-        except RuntimeError as exc:  # livekit SDK missing
-            return JSONResponse({"error": str(exc)}, status_code=503)
-        use_livekit = True
-
     try:
-        await pipeline.open_session(
-            session_id,
-            avatar_id,
-            local_participant=participant,
-            room=room,
-        )
+        await pipeline.open_session(session_id, avatar_id)
     except AvatarNotFound as exc:
-        if room is not None:
-            await room.disconnect()
         return JSONResponse({"error": str(exc)}, status_code=404)
     except AvatarPoolError as exc:
-        if room is not None:
-            await room.disconnect()
         return JSONResponse({"error": str(exc)}, status_code=503)
 
     resp: dict[str, Any] = {
         "session_id": session_id,
         "avatar_id": avatar_id,
         "mode": "push",
-        "transport": state.settings.transport,
-        "livekit": use_livekit,
+        "transport": "ws",
         "sample_rate": 16000,
         "sample_format": "s16le",
         "video_ws": f"/v1/sessions/{session_id}/video",
     }
-    if use_livekit:
-        resp["url"] = (
-            state.settings.public_livekit_url or state.settings.livekit_url
-        )
-        resp["room"] = state.settings.livekit_room
-        # Browser token: subscribe-only (no publish / data channels).
-        resp["token"] = make_access_token(
-            api_key=state.settings.livekit_api_key,
-            api_secret=state.settings.livekit_api_secret,
-            identity=session_id,
-            room=state.settings.livekit_room,
-            can_publish=False,
-        )
     return JSONResponse(resp)
 
 

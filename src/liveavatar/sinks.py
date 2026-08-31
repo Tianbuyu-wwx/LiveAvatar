@@ -1,9 +1,9 @@
-"""Pluggable publish sinks: LiveKit (existing), RTMP (ffmpeg), preview.
+"""Pluggable publish sinks: RTMP (ffmpeg), preview, WebSocket (R2).
 
 A ``PublishSink`` is the narrow interface the streaming pipeline needs from
-a video output backend. ``AvatarVideoPublisher`` (LiveKit) already matches
-it structurally; :class:`RtmpSink` adds an ffmpeg-backed RTMP/FLV output
-without requiring livekit.
+a video output backend. :class:`RtmpSink` adds an ffmpeg-backed RTMP/FLV
+output without requiring any external Python dependency; the service's
+default sink is the self-developed :class:`~liveavatar.ws_sink.WebSocketSink`.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ class RtmpSink:
     Requires an ``ffmpeg`` binary on PATH. BGR24 raw frames are piped in and
     encoded to H.264/FLV by ffmpeg — no extra Python dependencies.
 
-    Epoch semantics mirror :class:`AvatarVideoPublisher`: stale frames are
+    Epoch semantics mirror the WebSocketSink: stale frames are
     dropped before write; ``cancel_epoch`` is monotonic.
     """
 

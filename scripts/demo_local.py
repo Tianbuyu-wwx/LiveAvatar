@@ -115,9 +115,7 @@ def main() -> None:
 
     from liveavatar.region_codec import RegionSpec, write_region_json
 
-    state.settings = PublishSettings(
-        livekit_url="", livekit_api_key="", livekit_api_secret=""
-    )
+    state.settings = PublishSettings()
     state.settings.codec = args.codec
     state.pool_config = AvatarPoolConfig(avatar_data_root="nonexistent")
     if args.codec == "region":

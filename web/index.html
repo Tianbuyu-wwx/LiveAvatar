@@ -37,7 +37,6 @@
   <h1>LiveAvatar</h1>
   <div id="stage">
     <span id="placeholder">avatar video appears here</span>
-    <video id="video" autoplay playsinline muted style="display:none"></video>
     <canvas id="canvas"></canvas>
   </div>
   <div id="status">未连接</div>
@@ -49,11 +48,9 @@
   </div>
   <p class="hint">
     选择一个 16-bit PCM wav（16kHz 单声道最佳），点「开始」：浏览器把音频切片经
-    WebSocket 送给服务端，MuseTalk 实时生成口型视频推回本页播放。
-    服务端配置 LiveKit 时经 LiveKit 房间订阅；否则使用自研 WebSocket 视频传输
-    （canvas 渲染）。播放中点「打断」可验证 epoch 打断（视频 ≤ 1 帧内停止）。
+    WebSocket 送给服务端，MuseTalk 实时生成口型视频经自研 WebSocket 视频传输
+    推回本页（canvas 渲染）。播放中点「打断」可验证 epoch 打断（视频 ≤ 1 帧内停止）。
   </p>
-  <script src="https://unpkg.com/livekit-client@2/dist/livekit-client.umd.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

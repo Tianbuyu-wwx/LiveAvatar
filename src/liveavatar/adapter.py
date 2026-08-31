@@ -1,7 +1,7 @@
-"""AvatarStreamingAdapter: PCM chunk → AvatarWorker → AvatarVideoPublisher.
+"""AvatarStreamingAdapter: PCM chunk → AvatarWorker → video publisher.
 
 Sits between the audio producer (e.g. a streaming TTS worker) and the
-AvatarVideoPublisher (which captures frames into a LiveKit video track).
+video publisher sink (e.g. the WebSocketSink).
 It owns the AvatarLease lifecycle and converts the worker's async generator
 into background-task consumption so the caller's event loop stays free.
 
@@ -51,7 +51,6 @@ from typing import Any
 
 from ._common.loopqueue import LoopFreeQueue
 from .lease import CancelToken
-from .video_publisher import AvatarVideoPublisher
 from .worker import AvatarFrame, AvatarWorker
 
 logger = logging.getLogger("liveavatar.adapter")
@@ -97,8 +96,8 @@ class AvatarStreamingAdapter:
     pool : Any | None
         AvatarPool for lease management. When ``None``, ``worker`` must be
         supplied directly (direct mode — caller owns the worker).
-    publisher : AvatarVideoPublisher | None
-        The LiveKit video publisher. When ``None``, frames are produced but
+    publisher : Any | None
+        The video sink publisher. When ``None``, frames are produced but
         not published (testing mode — capture them via ``published_frames``).
     session_id, avatar_id :
         Lease identification.
@@ -118,7 +117,7 @@ class AvatarStreamingAdapter:
         self,
         *,
         pool: Any = None,
-        publisher: AvatarVideoPublisher | None = None,
+        publisher: Any | None = None,
         session_id: str = "",
         avatar_id: str = "",
         worker: AvatarWorker | None = None,

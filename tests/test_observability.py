@@ -111,7 +111,7 @@ class TestRenderMetrics(unittest.TestCase):
         self.assertIn('# TYPE liveavatar_frames_seen_total counter', text)
 
     def test_non_sink_publisher_ignored(self):
-        # LiveKit publisher (no stats()) must not break the export.
+        # Publisher without stats() must not break the export.
         state = SimpleNamespace(
             pipeline=SimpleNamespace(
                 sessions={"s1": SimpleNamespace(publisher=object())}

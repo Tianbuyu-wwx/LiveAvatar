@@ -1,9 +1,9 @@
 """LiveAvatar publish service — FastAPI + WebSocket entry point.
 
-Replaces the WisdomVII RealtimeCore session API with a minimal surface:
+Minimal surface (self-developed WS transport only):
 
-    POST   /v1/sessions              create session → {session_id, token, url}
-    DELETE /v1/sessions/{sid}        close session (unpublish track)
+    POST   /v1/sessions              create session → {session_id, video_ws}
+    DELETE /v1/sessions/{sid}        close session
     GET    /v1/sessions/{sid}/stats  adapter + publisher counters
     GET    /v1/avatars               list available avatars
     WS     /v1/sessions/{sid}/audio  stream PCM / send control messages
@@ -14,10 +14,10 @@ Replaces the WisdomVII RealtimeCore session API with a minimal surface:
 
 Layout (split from the former single publish.py, A1):
 - ``settings``        PublishSettings (env parsing)
-- ``tokens``          stdlib JWT signing (LiveKit-compatible)
+- ``tokens``          stdlib HS256 session-token signing/verification
 - ``state``           AppState + the process-wide ``state`` singleton
 - ``encoders``        per-session publisher/encoder factories + avatar_id
-- ``session_manager`` pipeline/voice-pool lifecycle, duplex sessions, LiveKit room
+- ``session_manager`` pipeline/voice-pool lifecycle + duplex sessions
 - ``routes``          REST endpoints + app assembly
 - ``ws_routes``       audio/video WebSocket endpoints
 
@@ -50,12 +50,11 @@ from .routes import (  # noqa: F401
 from .session_manager import (  # noqa: F401
     _default_avatar_id,
     _ensure_pipeline,
-    _join_room,
     _open_duplex_session,
 )
 from .settings import PublishSettings  # noqa: F401
 from .state import AppState, state  # noqa: F401
-from .tokens import make_access_token  # noqa: F401
+from .tokens import make_session_token, verify_session_token  # noqa: F401
 
 # Static web demo: mounted LAST (catch-all at "/") so every API/WS route
 # registered above matches first. Starlette StaticFiles handles
@@ -68,6 +67,7 @@ __all__ = [
     "CreateSessionBody",
     "PublishSettings",
     "app",
-    "make_access_token",
+    "make_session_token",
     "state",
+    "verify_session_token",
 ]

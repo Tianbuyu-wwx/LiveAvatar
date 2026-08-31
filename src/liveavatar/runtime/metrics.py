@@ -5,7 +5,7 @@ Records four key observability signals:
 - **first packet**: monotonic time of the first student_mic PCMFrame pushed
   to the worker (capture-to-ingest latency baseline).
 - **first playback**: monotonic time of the first Tutor audio frame captured
-  to the LiveKit AudioSource (ingest-to-playback latency baseline).
+  to the playback sink (ingest-to-playback latency baseline).
 - **interrupt-to-flush**: duration from a confirmed interrupt
   (``worker.advance_epoch``) to the flush control event emitted back to the
   browser (interrupt responsiveness SLO).

@@ -1,7 +1,7 @@
 """Tests for AvatarStreamingAdapter.
 
 Validates the PCM → AvatarWorker → AvatarVideoPublisher pipeline using
-fake workers and a fake publisher (no torch, no livekit, no cv2).
+fake workers and a fake publisher (no torch, no cv2).
 
 Coverage:
 - Direct mode (worker injected, no pool).

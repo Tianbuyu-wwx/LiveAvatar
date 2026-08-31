@@ -2,10 +2,10 @@
 
 Wires together the pieces the RealtimeWorker runtime used to manage:
 
-    audio source (WS / file / LiveKit track)
+    audio source (WS / file)
         → AvatarStreamingAdapter.push_pcm(pcm, pts_us, epoch)
             → AvatarPool.acquire() lease → AvatarWorker (MuseTalk)
-            → AvatarVideoPublisher (LiveKit track) or local sink
+            → publisher sink (self-developed WebSocketSink / capture)
 
 The pipeline owns:
 - the AvatarPool lifecycle (start/stop, worker loading),
@@ -13,11 +13,11 @@ The pipeline owns:
 - epoch advancement on interrupts,
 - session stats for observability.
 
-Example (pool mode, LiveKit publishing)::
+Example (pool mode, WS publishing)::
 
     pipeline = AvatarPipeline(AvatarPoolConfig())
     await pipeline.start()
-    await pipeline.open_session("s1", "yongen", local_participant=room.local_participant)
+    await pipeline.open_session("s1", "yongen")
     await pipeline.push_pcm("s1", pcm_chunk, pts_us=0, epoch=0)
     pipeline.cancel_epoch("s1", 1)          # interrupt
     await pipeline.close_session("s1")
@@ -34,7 +34,6 @@ from typing import Any
 from .adapter import AvatarStreamingAdapter
 from .config import AvatarPoolConfig
 from .pool import AvatarPool
-from .video_publisher import AvatarVideoPublisher
 
 logger = logging.getLogger("liveavatar.pipeline")
 
@@ -46,9 +45,8 @@ class SessionState:
     session_id: str
     avatar_id: str
     adapter: AvatarStreamingAdapter | None = None
-    publisher: AvatarVideoPublisher | None = None
-    room: Any = None  # livekit rtc.Room when publishing via LiveKit
-    local_participant: Any = None  # livekit participant (kept for factories)
+    # PublishSink-compatible (WebSocketSink); None = capture mode (tests).
+    publisher: Any | None = None
     # Monotonic PTS clock for sources that don't carry their own timestamps
     # (e.g. WebSocket PCM): advanced by the chunk duration on every push.
     next_pts_us: int = 0
@@ -114,8 +112,6 @@ class AvatarPipeline:
         session_id: str,
         avatar_id: str,
         *,
-        local_participant: Any = None,
-        room: Any = None,
         width: int | None = None,
         height: int | None = None,
         target_fps: int | None = None,
@@ -124,33 +120,17 @@ class AvatarPipeline:
     ) -> SessionState:
         """Create the publisher + adapter for a session.
 
-        Parameters
-        ----------
-        local_participant :
-            LiveKit ``room.local_participant`` to publish the video track
-            on. When ``None`` (and no publisher_factory), frames are
-            captured on the adapter for testing / local preview.
-        room :
-            The joined LiveKit room (kept for cleanup/unpublish).
+        Without a ``publisher_factory`` the session runs in capture mode
+        (publisher None) for testing / local tooling.
         """
         if session_id in self._sessions:
             raise ValueError(f"session '{session_id}' already open")
 
         state = SessionState(session_id=session_id, avatar_id=avatar_id)
-        state.room = room
-        state.local_participant = local_participant
 
-        # Publisher: LiveKit track, custom factory, or capture-mode (None).
+        # Publisher: custom factory or capture-mode (None).
         if self._publisher_factory is not None:
             state.publisher = self._publisher_factory(state)
-        elif local_participant is not None:
-            state.publisher = AvatarVideoPublisher(
-                local_participant,
-                session_id,
-                width=width or self._config.width,
-                height=height or self._config.height,
-                target_fps=target_fps or self._config.target_fps,
-            )
 
         if state.publisher is not None and hasattr(state.publisher, "start"):
             await state.publisher.start()
@@ -184,14 +164,6 @@ class AvatarPipeline:
             except Exception:
                 logger.exception(
                     "pipeline_publisher_stop_failed",
-                    extra={"session_id": session_id},
-                )
-        if state.room is not None and hasattr(state.room, "disconnect"):
-            try:
-                await state.room.disconnect()
-            except Exception:
-                logger.exception(
-                    "pipeline_room_disconnect_failed",
                     extra={"session_id": session_id},
                 )
         logger.info("pipeline_session_closed", extra={"session_id": session_id})

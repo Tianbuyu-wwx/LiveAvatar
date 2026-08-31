@@ -3,10 +3,9 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      # Video transport: self-developed ws transport is the default and
-      # needs no extra infrastructure. codec: "mjpeg" (full frames) or
-      # "region" (region-delta, requires each avatar's region.json).
-      LIVEAVATAR_TRANSPORT: ws
+      # Video transport: self-developed ws transport. codec: "mjpeg"
+      # (full frames) or "region" (region-delta, requires each avatar's
+      # region.json).
       LIVEAVATAR_CODEC: mjpeg
       # Avatar inference
       LIVEAVATAR_DEVICE: cuda
@@ -28,8 +27,3 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
-# Legacy LiveKit transport (deprecated): set LIVEAVATAR_TRANSPORT=livekit
-# plus LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET and run
-# `docker run -p 7880:7880 -v ./livekit.yaml:/etc/livekit.yaml:ro livekit/livekit-server`
-# alongside this service if you still need it.

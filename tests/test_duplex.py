@@ -2,7 +2,7 @@
 
 Covers: PCM re-chunking, the mic → VAD/EOU/ASR → TTS loop with the
 reference adapters + FakeTts (CPU-only), barge-in epoch advance, spoke
-description and stats. No GPU, no network, no LiveKit.
+description and stats. No GPU, no network.
 """
 
 from __future__ import annotations
