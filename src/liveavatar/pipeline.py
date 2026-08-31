@@ -198,6 +198,11 @@ class AvatarPipeline:
         return True
 
     @property
+    def pool(self) -> AvatarPool:
+        """The shared avatar pool (reused by duplex sessions)."""
+        return self._pool
+
+    @property
     def sessions(self) -> dict[str, SessionState]:
         return dict(self._sessions)
 

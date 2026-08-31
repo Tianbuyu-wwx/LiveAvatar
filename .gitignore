@@ -17,3 +17,9 @@ logs/
 .coverage
 htmlcov/
 .mypy_cache/
+
+# Vendored GPT-SoVITS: engine code is committed, large data assets are not.
+# Fetch them from the upstream repo / scripts/download_gptsovits.py when needed.
+third_party/GPT_SoVITS/text/G2PWModel/g2pW.onnx
+third_party/GPT_SoVITS/text/ja_userdic/
+third_party/GPT_SoVITS/pretrained_models/

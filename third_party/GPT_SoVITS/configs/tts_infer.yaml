@@ -1,0 +1,19 @@
+custom:
+  bert_base_path: "E:\\\u9879\u76EE\\WisdomVII\\Modules\\NVCFramework\\GPT_SoVITS\\\
+    pretrained_models\\chinese-roberta-wwm-ext-large"
+  cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
+  device: cuda
+  is_half: true
+  t2s_weights_path: "E:/\u9879\u76EE/WisdomVII/Modules/NVCFramework/weights/nahida/\u7EB3\
+    \u897F\u59B2-e15.ckpt"
+  version: v2Pro
+  vits_weights_path: "E:/\u9879\u76EE/WisdomVII/Modules/NVCFramework/weights/nahida/\u7EB3\
+    \u897F\u59B2_e8_s4328.pth"
+v2Pro:
+  bert_base_path: GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large
+  cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
+  device: cpu
+  is_half: false
+  t2s_weights_path: weights/test/test-e10_final.ckpt
+  version: v2Pro
+  vits_weights_path: weights/test/test_final.pth

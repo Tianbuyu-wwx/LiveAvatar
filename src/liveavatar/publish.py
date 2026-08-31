@@ -10,6 +10,18 @@ Replaces the WisdomVII RealtimeCore session API with a minimal surface:
     GET    /health                   liveness probe
     GET    /                         web demo (served from web/)
 
+Session modes (POST /v1/sessions body ``mode``)
+-----------------------------------------------
+- ``push`` (default): the client streams TTS-ready PCM and receives
+  avatar video — the pipeline path.
+- ``duplex``: a full-duplex star session (:mod:`liveavatar.duplex`) —
+  the server runs VAD/EOU/ASR → LLM → TTS → Avatar on the microphone
+  audio and sends synthesized speech + events back over the same audio
+  WS. Spokes are configured via ``LIVEAVATAR_ASR_URL``,
+  ``LIVEAVATAR_LLM_*``, ``LIVEAVATAR_VOICE_CHAR``, ``LIVEAVATAR_AEC``
+  and ``LIVEAVATAR_DUPLEX_AVATAR`` (all optional; defaults: reference
+  ASR, echo (no LLM), FakeTts, no AEC, audio-only).
+
 WebSocket protocol
 ------------------
 - Binary frames: raw PCM S16LE (16 kHz mono) — one chunk per frame.
@@ -57,6 +69,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import AvatarPoolConfig
+from .duplex import DuplexSession, DuplexSettings
 from .pipeline import AvatarPipeline, SessionState
 from .pool import AvatarNotFound, AvatarPoolError
 
@@ -98,6 +111,9 @@ class PublishSettings:
     max_sessions: int = 16
     # Maximum WebSocket binary frame size in bytes (PCM chunks are ~KB).
     max_ws_frame_bytes: int = 65536
+    # Full-duplex spoke configuration (LIVEAVATAR_ASR_URL / LLM_* /
+    # VOICE_CHAR / AEC / DUPLEX_AVATAR — see liveavatar.duplex).
+    duplex: DuplexSettings = field(default_factory=DuplexSettings.from_env)
 
     @classmethod
     def from_env(cls) -> PublishSettings:
@@ -192,6 +208,12 @@ class AppState:
     pool_config: AvatarPoolConfig = field(default_factory=AvatarPoolConfig)
     pipeline: AvatarPipeline | None = None
     start_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Full-duplex sessions (mode="duplex") — keyed by session id.
+    duplex_sessions: dict[str, DuplexSession] = field(default_factory=dict)
+    # Shared TTS VoicePool (GPT-SoVITS) — created lazily on the first
+    # duplex session that configures LIVEAVATAR_VOICE_CHAR.
+    voice_pool: Any = None
+    voice_pool_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 state = AppState()
@@ -265,6 +287,89 @@ def _region_encoder_for(avatar_id: str) -> Any:
         return RegionFrameEncoder(mask_spec)
 
 
+async def _ensure_voice_pool() -> Any:
+    """Lazily create + start the shared TTS VoicePool (duplex mode)."""
+    async with state.voice_pool_lock:
+        if state.voice_pool is None:
+            from .voice.config import VoicePoolConfig
+            from .voice.pool import VoicePool
+
+            state.voice_pool = VoicePool(VoicePoolConfig())
+            await state.voice_pool.start()
+        return state.voice_pool
+
+
+def _duplex_video_sink(avatar_id: str) -> Any:
+    """WebSocketSink publisher for a duplex session's avatar spoke."""
+    from .ws_sink import MjpegFrameEncoder, WebSocketSink
+
+    cfg = state.pool_config
+    encoder: Any = None
+    if state.settings.codec == "region":
+        encoder = _region_encoder_for(avatar_id)
+    return WebSocketSink(
+        encoder=encoder if encoder is not None else MjpegFrameEncoder(),
+        target_fps=cfg.target_fps,
+        width=cfg.width,
+        height=cfg.height,
+        quality=80,
+    )
+
+
+async def _open_duplex_session(session_id: str, avatar_id: str) -> JSONResponse:
+    """Create + start a full-duplex session (star topology over WS)."""
+    if session_id in state.duplex_sessions:
+        return JSONResponse({"error": "session already open"}, status_code=409)
+    if len(state.duplex_sessions) >= state.settings.max_sessions:
+        return JSONResponse({"error": "session limit reached"}, status_code=429)
+
+    ds = state.settings.duplex
+    voice_pool: Any = None
+    if ds.char_id:
+        try:
+            voice_pool = await _ensure_voice_pool()
+        except Exception:
+            logger.exception("voice_pool_start_failed")
+            return JSONResponse(
+                {"error": "voice pool failed to start"}, status_code=503
+            )
+
+    avatar_pool: Any = None
+    sink: Any = None
+    if ds.with_avatar:
+        try:
+            pipeline = await _ensure_pipeline()
+            avatar_pool = pipeline.pool
+            sink = _duplex_video_sink(avatar_id)
+        except Exception:
+            logger.exception("duplex_avatar_unavailable")
+            # Audio-only fallback — never fail the session for video.
+
+    session = DuplexSession(
+        session_id,
+        avatar_id,
+        settings=ds,
+        voice_pool=voice_pool,
+        avatar_pool=avatar_pool,
+        sink=sink,
+    )
+    await session.start()
+    state.duplex_sessions[session_id] = session
+
+    resp: dict[str, Any] = {
+        "session_id": session_id,
+        "avatar_id": avatar_id,
+        "mode": "duplex",
+        "transport": "ws",
+        "spokes": ds.describe(),
+        "sample_rate": 16000,
+        "sample_format": "s16le",
+    }
+    if sink is not None:
+        resp["video_ws"] = f"/v1/sessions/{session_id}/video"
+    return JSONResponse(resp)
+
+
 async def _join_room(session_id: str) -> tuple[Any, Any]:
     """Join the LiveKit room as the avatar publisher bot.
 
@@ -308,6 +413,15 @@ class CreateSessionBody(BaseModel):
         max_length=64,
         description="Avatar to lease; defaults to the first available.",
     )
+    mode: str = Field(
+        default="push",
+        pattern=r"^(push|duplex)$",
+        description=(
+            "'push' (default): client streams TTS-ready PCM through the "
+            "avatar adapter. 'duplex': full-duplex star session — the "
+            "server runs VAD/EOU/ASR → LLM → TTS → Avatar on mic audio."
+        ),
+    )
 
 
 def _check_auth(request: Request) -> JSONResponse | None:
@@ -333,8 +447,20 @@ def _check_ws_auth(websocket: WebSocket) -> bool:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Stop the shared pipeline on shutdown."""
+    """Stop all sessions, the voice pool and the pipeline on shutdown."""
     yield
+    for sid in list(state.duplex_sessions):
+        session = state.duplex_sessions.pop(sid)
+        try:
+            await session.stop()
+        except Exception:
+            logger.exception("duplex_session_stop_failed", extra={"session_id": sid})
+    if state.voice_pool is not None:
+        try:
+            await state.voice_pool.stop()
+        except Exception:
+            logger.exception("voice_pool_stop_failed")
+        state.voice_pool = None
     if state.pipeline is not None:
         await state.pipeline.stop()
         state.pipeline = None
@@ -370,7 +496,8 @@ async def create_session(
 ) -> JSONResponse:
     """Create a session: acquire the avatar lease and join the room.
 
-    Body (all optional): ``{"session_id": "...", "avatar_id": "yongen"}``.
+    Body (all optional): ``{"session_id": "...", "avatar_id": "yongen",
+    "mode": "push" | "duplex"}``.
     """
     unauthorized = _check_auth(request)
     if unauthorized is not None:
@@ -378,6 +505,9 @@ async def create_session(
     body = body or CreateSessionBody()
     session_id = body.session_id or f"sess_{secrets.token_hex(8)}"
     avatar_id = body.avatar_id or _default_avatar_id()
+
+    if body.mode == "duplex":
+        return await _open_duplex_session(session_id, avatar_id)
 
     pipeline = await _ensure_pipeline()
 
@@ -425,6 +555,7 @@ async def create_session(
     resp: dict[str, Any] = {
         "session_id": session_id,
         "avatar_id": avatar_id,
+        "mode": "push",
         "transport": state.settings.transport,
         "livekit": use_livekit,
         "sample_rate": 16000,
@@ -460,6 +591,10 @@ async def delete_session(session_id: str, request: Request) -> JSONResponse:
     unauthorized = _check_auth(request)
     if unauthorized is not None:
         return unauthorized
+    duplex = state.duplex_sessions.pop(session_id, None)
+    if duplex is not None:
+        await duplex.stop()
+        return JSONResponse({"closed": True})
     pipeline = state.pipeline
     if pipeline is None:
         return JSONResponse({"error": "no session"}, status_code=404)
@@ -472,6 +607,9 @@ async def session_stats(session_id: str, request: Request) -> JSONResponse:
     unauthorized = _check_auth(request)
     if unauthorized is not None:
         return unauthorized
+    duplex = state.duplex_sessions.get(session_id)
+    if duplex is not None:
+        return JSONResponse(duplex.stats())
     pipeline = state.pipeline
     if pipeline is None or pipeline.get_session(session_id) is None:
         return JSONResponse({"error": "no session"}, status_code=404)
@@ -480,9 +618,20 @@ async def session_stats(session_id: str, request: Request) -> JSONResponse:
 
 @app.websocket("/v1/sessions/{session_id}/audio")
 async def audio_ws(websocket: WebSocket, session_id: str) -> None:
-    """Stream PCM into the session; JSON text frames control the epoch."""
+    """Stream PCM into the session; JSON text frames control the epoch.
+
+    Push mode: binary frames are TTS-ready PCM fed to the avatar adapter.
+    Duplex mode: binary frames are microphone audio processed through the
+    star topology (VAD/EOU/ASR → LLM → TTS → Avatar); the server sends
+    synthesized PCM back as binary frames and pipeline events (asr/vad/
+    eou/control/error) as JSON text frames.
+    """
     if not _check_ws_auth(websocket):
         await websocket.close(code=4401, reason="unauthorized")
+        return
+    duplex = state.duplex_sessions.get(session_id)
+    if duplex is not None:
+        await _duplex_audio_ws(websocket, duplex)
         return
     pipeline = await _ensure_pipeline()
     session: SessionState | None = pipeline.get_session(session_id)
@@ -537,6 +686,85 @@ async def audio_ws(websocket: WebSocket, session_id: str) -> None:
         )
 
 
+async def _duplex_audio_ws(websocket: WebSocket, duplex: DuplexSession) -> None:
+    """Full-duplex audio loop: mic uplink + TTS/event downlink.
+
+    The duplex session is closed when the audio socket drops (or on
+    ``DELETE /v1/sessions/{sid}``), mirroring the short-lived session
+    lifecycle of the push mode.
+    """
+    await websocket.accept()
+    max_frame = state.settings.max_ws_frame_bytes
+    logger.info(
+        "ws_connected",
+        extra={"session_id": duplex.session_id, "mode": "duplex"},
+    )
+
+    async def _sender() -> None:
+        """Pump worker output (PCM + events) to the browser."""
+        try:
+            while True:
+                item = await duplex.out_queue.dequeue()
+                if item["kind"] == "pcm":
+                    await websocket.send_bytes(item["data"])
+                else:
+                    await websocket.send_json(
+                        {"type": item["event_type"], **item["payload"]}
+                    )
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception(
+                "duplex_sender_failed",
+                extra={"session_id": duplex.session_id},
+            )
+
+    sender_task = asyncio.create_task(_sender())
+    try:
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if (text := msg.get("text")) is not None:
+                try:
+                    ctrl = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                ctype = ctrl.get("type")
+                if ctype in ("cancel", "epoch"):
+                    # Barge-in: the worker is the epoch authority.
+                    new_epoch = duplex.cancel_epoch()
+                    logger.info(
+                        "duplex_barge_in",
+                        extra={"session_id": duplex.session_id, "epoch": new_epoch},
+                    )
+                elif ctype == "stop":
+                    break
+            elif (pcm := msg.get("bytes")) is not None:
+                if len(pcm) > max_frame:
+                    logger.warning(
+                        "ws_frame_too_large",
+                        extra={"session_id": duplex.session_id, "bytes": len(pcm)},
+                    )
+                    continue
+                await duplex.push_pcm(pcm)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        sender_task.cancel()
+        try:
+            await sender_task
+        except asyncio.CancelledError:
+            pass
+        if state.duplex_sessions.get(duplex.session_id) is duplex:
+            state.duplex_sessions.pop(duplex.session_id, None)
+        await duplex.stop()
+        logger.info(
+            "ws_disconnected",
+            extra={"session_id": duplex.session_id, "mode": "duplex"},
+        )
+
+
 # ────────────────────────────────────── video WS (self-developed transport)
 
 
@@ -551,9 +779,15 @@ async def video_ws(websocket: WebSocket, session_id: str) -> None:
     if not _check_ws_auth(websocket):
         await websocket.close(code=4401, reason="unauthorized")
         return
-    pipeline = await _ensure_pipeline()
-    session: SessionState | None = pipeline.get_session(session_id)
-    sink = getattr(session, "publisher", None) if session else None
+    # Duplex sessions carry their own sink; push sessions live on the
+    # pipeline (started lazily only when a push session is actually needed).
+    duplex = state.duplex_sessions.get(session_id)
+    sink: Any = duplex.sink if duplex is not None else None
+    pipeline: AvatarPipeline | None = None
+    if duplex is None:
+        pipeline = await _ensure_pipeline()
+        session: SessionState | None = pipeline.get_session(session_id)
+        sink = getattr(session, "publisher", None) if session else None
     from .video_protocol import (
         VideoFrameHeader,
         make_flags,
@@ -615,7 +849,10 @@ async def video_ws(websocket: WebSocket, session_id: str) -> None:
                 wire = await asyncio.wait_for(client.queue.get(), timeout=0.5)
             except asyncio.TimeoutError:
                 # Session gone without stop() (e.g. pipeline teardown)?
-                if pipeline.get_session(session_id) is None:
+                if duplex is not None:
+                    if not duplex._running:
+                        break
+                elif pipeline is not None and pipeline.get_session(session_id) is None:
                     break
                 continue
             if wire is EOF_SENTINEL:
