@@ -13,21 +13,10 @@ from liveavatar.config import AvatarPoolConfig
 from liveavatar.pipeline import AvatarPipeline
 from liveavatar.pool import AvatarNotFound
 from liveavatar.worker import AvatarAssets, AvatarWorker
+from tests.conftest import make_assets as _make_assets
+from tests.conftest import pcm as _pcm
 
 # ── fakes ──
-
-
-def _make_assets(avatar_id: str = "yongen") -> AvatarAssets:
-    base = f"avatars/{avatar_id}/"
-    return AvatarAssets(
-        avatar_id=avatar_id,
-        data_dir=base,
-        full_imgs_dir=base + "full_imgs",
-        coords_path=base + "coords.pkl",
-        latents_path=base + "latents.pt",
-        mask_dir=base + "mask",
-        mask_coords_path=base + "mask_coords.pkl",
-    )
 
 
 class _CountingWorker(AvatarWorker):
@@ -109,11 +98,6 @@ async def _wait_for(predicate, timeout: float = 1.0) -> bool:
         await asyncio.sleep(0.01)
         elapsed += 0.01
     return True
-
-
-def _pcm(samples: int = 320) -> bytes:
-    """320 samples @16k = 20ms of audio."""
-    return b"\x01\x00" * samples
 
 
 # ── tests ──

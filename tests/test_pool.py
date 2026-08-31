@@ -24,6 +24,7 @@ from liveavatar.pool import (
     discover_avatars,
 )
 from liveavatar.worker import AvatarAssets, AvatarWorker
+from tests.conftest import make_assets as _make_assets
 
 # ── Fake worker for pool tests (no torch) ──
 
@@ -51,19 +52,6 @@ def _make_worker_factory():
 
 
 # ── Helpers ──
-
-
-def _make_assets(avatar_id: str) -> AvatarAssets:
-    base = f"avatars/{avatar_id}/"
-    return AvatarAssets(
-        avatar_id=avatar_id,
-        data_dir=base,
-        full_imgs_dir=base + "full_imgs",
-        coords_path=base + "coords.pkl",
-        latents_path=base + "latents.pt",
-        mask_dir=base + "mask",
-        mask_coords_path=base + "mask_coords.pkl",
-    )
 
 
 def _create_temp_avatars(

@@ -21,27 +21,10 @@ import unittest
 
 from liveavatar.adapter import AvatarStreamingAdapter, _PendingChunk
 from liveavatar.worker import AvatarAssets, AvatarFrame, AvatarWorker
+from tests.conftest import make_assets as _make_assets
+from tests.conftest import pcm
 
 # ────────────────────────────────────────────────────── helpers
-
-
-def _make_assets(avatar_id: str = "nahida") -> AvatarAssets:
-    base = f"avatars/{avatar_id}/"
-    return AvatarAssets(
-        avatar_id=avatar_id,
-        data_dir=base,
-        full_imgs_dir=base + "full_imgs",
-        coords_path=base + "coords.pkl",
-        latents_path=base + "latents.pt",
-        mask_dir=base + "mask",
-        mask_coords_path=base + "mask_coords.pkl",
-    )
-
-
-def _pcm(data: int = 100, samples: int = 320) -> bytes:
-    """Build a PCM S16LE chunk with the given sample value."""
-    return (data).to_bytes(2, "little", signed=True) * samples
-
 
 class _CountingAvatarWorker(AvatarWorker):
     """Fake worker that yields ``batch_size`` frames per chunk, tagged with pts.
@@ -155,7 +138,7 @@ class TestDirectMode(unittest.IsolatedAsyncioTestCase):
         )
         await adapter.start()
         try:
-            ok = await adapter.push_pcm(_pcm(100), pts_us=0, epoch=0)
+            ok = await adapter.push_pcm(pcm(value=100), pts_us=0, epoch=0)
             self.assertTrue(ok)
             # Wait for consumer to process.
             await _wait_for(lambda: adapter.stats.frames_produced >= 4)
@@ -176,7 +159,7 @@ class TestDirectMode(unittest.IsolatedAsyncioTestCase):
         )
         await adapter.start()
         try:
-            await adapter.push_pcm(_pcm(50), pts_us=0, epoch=0)
+            await adapter.push_pcm(pcm(value=50), pts_us=0, epoch=0)
             await _wait_for(lambda: len(pub.captured) >= 2)
             self.assertEqual(len(pub.captured), 2)
             self.assertEqual(adapter.stats.frames_published, 2)
@@ -190,8 +173,8 @@ class TestDirectMode(unittest.IsolatedAsyncioTestCase):
         )
         await adapter.start()
         try:
-            await adapter.push_pcm(_pcm(10), pts_us=0, epoch=0)
-            await adapter.push_pcm(_pcm(20), pts_us=80_000, epoch=0)
+            await adapter.push_pcm(pcm(value=10), pts_us=0, epoch=0)
+            await adapter.push_pcm(pcm(value=20), pts_us=80_000, epoch=0)
             await _wait_for(lambda: adapter.stats.frames_produced >= 4)
             self.assertEqual(adapter.stats.frames_produced, 4)
             # 4 frames total, 2 per chunk with pts 0, 40ms, 80ms, 120ms.
@@ -239,7 +222,7 @@ class TestPoolMode(unittest.IsolatedAsyncioTestCase):
         )
         await adapter.start()
         try:
-            await adapter.push_pcm(_pcm(80), pts_us=0, epoch=0)
+            await adapter.push_pcm(pcm(value=80), pts_us=0, epoch=0)
             await _wait_for(lambda: adapter.stats.frames_produced >= 2)
             self.assertEqual(adapter.stats.frames_produced, 2)
         finally:
@@ -258,7 +241,7 @@ class TestEpochCancellation(unittest.IsolatedAsyncioTestCase):
         await adapter.start()
         try:
             adapter.cancel_epoch(5)
-            ok = await adapter.push_pcm(_pcm(10), pts_us=0, epoch=3)
+            ok = await adapter.push_pcm(pcm(value=10), pts_us=0, epoch=3)
             self.assertFalse(ok)
             self.assertEqual(adapter.stats.frames_dropped_epoch, 1)
             # Worker should never see the stale chunk.
@@ -288,7 +271,7 @@ class TestEpochCancellation(unittest.IsolatedAsyncioTestCase):
         try:
             # Push several chunks without waiting for processing.
             for i in range(5):
-                await adapter.push_pcm(_pcm(i), pts_us=i * 80_000, epoch=0)
+                await adapter.push_pcm(pcm(value=i), pts_us=i * 80_000, epoch=0)
             # Cancel — should drain the queue.
             adapter.cancel_epoch(1)
             # Give the consumer a moment to confirm no further processing.
@@ -349,7 +332,7 @@ class TestBackpressure(unittest.IsolatedAsyncioTestCase):
             # Push faster than the worker can process.
             results = []
             for i in range(10):
-                ok = await adapter.push_pcm(_pcm(i), pts_us=i * 80_000, epoch=0)
+                ok = await adapter.push_pcm(pcm(value=i), pts_us=i * 80_000, epoch=0)
                 results.append(ok)
             # At least one drop should have happened (queue cap = 2).
             self.assertIn(False, results)
@@ -378,7 +361,7 @@ class TestDegradation(unittest.IsolatedAsyncioTestCase):
             # Push 5 chunks — first 3 fail on primary (triggering degradation),
             # then the fallback takes over for chunks 4 and 5 (which succeed).
             for i in range(5):
-                await adapter.push_pcm(_pcm(i), pts_us=i * 40_000, epoch=0)
+                await adapter.push_pcm(pcm(value=i), pts_us=i * 40_000, epoch=0)
                 await asyncio.sleep(0.02)  # let the consumer process
             # 3 errors recorded (all on the primary before degradation).
             self.assertEqual(adapter.stats.inference_errors, 3)
@@ -403,7 +386,7 @@ class TestDegradation(unittest.IsolatedAsyncioTestCase):
         try:
             # Trigger degradation.
             for i in range(3):
-                await adapter.push_pcm(_pcm(i), pts_us=i * 40_000, epoch=0)
+                await adapter.push_pcm(pcm(value=i), pts_us=i * 40_000, epoch=0)
                 await asyncio.sleep(0.02)
             self.assertTrue(adapter.stats.degraded)
             # Advance epoch — degradation resets, primary gets another chance.
@@ -440,7 +423,7 @@ class TestDegradation(unittest.IsolatedAsyncioTestCase):
         try:
             # Push 5 chunks: fail, fail, success, success, success.
             for i in range(5):
-                await adapter.push_pcm(_pcm(i), pts_us=i * 40_000, epoch=0)
+                await adapter.push_pcm(pcm(value=i), pts_us=i * 40_000, epoch=0)
                 await asyncio.sleep(0.02)
             # Two errors recorded but no degradation (streak reset by success).
             self.assertEqual(adapter.stats.inference_errors, 2)

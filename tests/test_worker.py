@@ -22,23 +22,7 @@ from liveavatar.worker import (
     AvatarWorker,
     AvatarWorkerStats,
 )
-
-# ── helpers ──
-
-
-def _make_assets(avatar_id: str = "nahida") -> AvatarAssets:
-    """Build a minimal AvatarAssets with fake paths (no files accessed)."""
-    base = f"avatars/{avatar_id}/"
-    return AvatarAssets(
-        avatar_id=avatar_id,
-        data_dir=base,
-        full_imgs_dir=base + "full_imgs",
-        coords_path=base + "coords.pkl",
-        latents_path=base + "latents.pt",
-        mask_dir=base + "mask",
-        mask_coords_path=base + "mask_coords.pkl",
-    )
-
+from tests.conftest import make_assets as _make_assets
 
 # ── Fake subclass that yields synthetic BGR24 frames ──
 

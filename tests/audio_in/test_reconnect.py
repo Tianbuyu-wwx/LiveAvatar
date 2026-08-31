@@ -12,6 +12,8 @@ import json
 import unittest
 from unittest import mock
 
+from tests.conftest import wait_until as _wait_until
+
 from liveavatar.audio_in.adapters import realtime_asr_client as rac
 from liveavatar.audio_in.adapters.realtime_asr_client import RealtimeAsrClient
 
@@ -61,15 +63,6 @@ def _patch_connect(results: list):
         return item
 
     return mock.patch.object(rac.websockets, "connect", fake_connect)
-
-
-async def _wait_until(cond, timeout: float = 2.0) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while not cond():
-        if loop.time() > deadline:
-            raise AssertionError("condition not met within timeout")
-        await asyncio.sleep(0.01)
 
 
 @skip_no_ws

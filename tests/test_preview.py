@@ -12,18 +12,7 @@ from unittest import mock
 
 from liveavatar.preview import PreviewSink, load_wav_mono_16k
 from liveavatar.worker import AvatarAssets, AvatarFrame, AvatarWorker
-
-
-def _write_wav(path, samples: list[int], framerate: int, nchannels: int = 1,
-               sampwidth: int = 2) -> None:
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(nchannels)
-        wf.setsampwidth(sampwidth)
-        wf.setframerate(framerate)
-        frames = b"".join(struct.pack("<h", s) for s in samples)
-        if nchannels > 1:
-            frames = frames * nchannels  # interleaved identical channels
-        wf.writeframes(frames)
+from tests.conftest import write_wav as _write_wav
 
 
 class TestLoadWavMono16k(unittest.TestCase):

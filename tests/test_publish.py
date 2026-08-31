@@ -22,11 +22,7 @@ from liveavatar.publish import (
     state,
 )
 from liveavatar.worker import AvatarAssets, AvatarWorker
-
-
-def _pcm(samples: int = 320) -> bytes:
-    """20ms of 16kHz mono PCM."""
-    return b"\x01\x00" * samples
+from tests.conftest import pcm as _pcm
 
 
 class _ServiceWorker(AvatarWorker):
