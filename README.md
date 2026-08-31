@@ -187,7 +187,7 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 
 | 端点 | 说明 |
 |---|---|
-| `POST /v1/sessions` | 创建会话；body `{"mode": "push"(默认) \| "duplex", "avatar_id": ...}` |
+| `POST /v1/sessions` | 创建会话；body `{"mode": "push"(默认) \| "duplex", "avatar_id": ...}`；配置 `LIVEAVATAR_API_SECRET` 时响应附带短 TTL `session_token` |
 | `DELETE /v1/sessions/{id}` | 关闭会话并取消发布视频轨道 |
 | `GET /v1/sessions/{id}/stats` | adapter / publisher 计数器快照（含质量档位 tier） |
 | `GET /v1/avatars` | 列出可用 avatar |
@@ -195,6 +195,8 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `WS /v1/sessions/{id}/video` | 订阅视频流（自研二进制协议，见 [docs/PROTOCOL.md](docs/PROTOCOL.md)） |
 | `GET /metrics` | Prometheus 文本格式指标（需 `LIVEAVATAR_METRICS=on`，鉴权同 REST） |
 | `GET /health` | 健康检查 |
+
+> WS 鉴权：静态密钥（`?api_key=` 或 `X-API-Key` 头）或短 TTL 会话令牌（`?token=` / `X-Session-Token` / `Authorization: Bearer`，`sub` 须匹配会话 ID）二选一。
 
 音频 WS 控制消息（JSON）：
 
@@ -233,7 +235,7 @@ await pipeline.close_session("s1")
 await pipeline.stop()
 ```
 
-测试时可注入 fake `pool` / `publisher_factory`，470+ 个单测全部不依赖 torch / GPU。
+测试时可注入 fake `pool` / `publisher_factory`，490+ 个单测全部不依赖 torch / GPU。
 
 ## 目录结构
 
@@ -282,7 +284,7 @@ scripts/                 # download_models / download_gptsovits / prepare_avatar
                          # make_face_dataset / face_align / train_face_det /
                          # train_face_landmarks / accept_face_backend
 web/                     # 浏览器 demo（无构建，原生 JS：player.js 抖动缓冲 + canvas 合成）
-tests/                   # 49 文件、470+ 用例（协议/传输/自适应/星型架构/人脸/并发/端到端，CPU-only）
+tests/                   # 51 文件、490+ 用例（协议/传输/自适应/星型架构/人脸/并发/令牌/端到端，CPU-only）
 third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练权重不入库）
 ```
 
