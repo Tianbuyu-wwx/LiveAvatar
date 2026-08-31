@@ -6,10 +6,12 @@ build/
 dist/
 .pytest_cache/
 .ruff_cache/
-models/
-avatars/
-data/
-logs/
+# Anchored to repo root: bare "models/" etc. used to swallow source dirs
+# nested anywhere in the tree (e.g. src/liveavatar/musetalk/models/).
+/models/
+/avatars/
+/data/
+/logs/
 *.db
 *.mp4
 .env
