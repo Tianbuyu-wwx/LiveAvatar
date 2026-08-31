@@ -33,7 +33,11 @@ def _git(*args: str) -> str:
 )
 def test_musetalk_models_sources_tracked() -> None:
     """Source files under nested models/ dirs must be committed."""
-    tracked = _git("ls-files", "src/liveavatar/musetalk/models/", "third_party/GPT_SoVITS/AR/models/")
+    tracked = _git(
+        "ls-files",
+        "src/liveavatar/musetalk/models/",
+        "third_party/GPT_SoVITS/AR/models/",
+    )
     for path in (
         "src/liveavatar/musetalk/models/__init__.py",
         "src/liveavatar/musetalk/models/vae.py",

@@ -16,10 +16,13 @@ RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/c
 
 COPY pyproject.toml ./
 COPY src/ ./src/
+# transformers/einops below are for the vendored GPT-SoVITS TTS engine
+# (the MuseTalk inference path itself needs neither).
 RUN pip install --no-deps . \
     && pip install "fastapi>=0.110" "uvicorn>=0.29" \
-        "opencv-python" "diffusers" "transformers" "einops" \
-        "numpy" "pydantic>=2" "pydantic-settings>=2" "huggingface_hub"
+        "opencv-python" "transformers" "einops" \
+        "numpy" "pydantic>=2" "pydantic-settings>=2" "huggingface_hub" \
+        "torchaudio" "librosa" "fast_langdetect"
 
 # Demo page + scripts.
 COPY web/ ./web/

@@ -21,9 +21,17 @@ server = ["fastapi>=0.110", "uvicorn>=0.29"]
 inference = [
     "torch",
     "torchvision",
-    "diffusers",
-    "transformers",
+]
+# GPT-SoVITS vendored TTS engine implicit deps (third_party/GPT_SoVITS):
+# transformers is used by cnhubert/TextPreprocessor/g2pw, einops by
+# module/core_vq.py. The MuseTalk inference path itself (self-written VAE /
+# UNet / Whisper encoder) needs only torch + torchvision.
+tts = [
+    "torchaudio",
+    "librosa",
+    "fast_langdetect",
     "einops",
+    "transformers",
 ]
 dev = [
     "pytest>=8",

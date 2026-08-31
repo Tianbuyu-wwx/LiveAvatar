@@ -1,4 +1,4 @@
-from diffusers import AutoencoderKL
+from .vae_kl import AutoencoderKLCompat
 import torch
 import torchvision.transforms as transforms
 import torch.nn.functional as F
@@ -20,7 +20,7 @@ class VAE():
         :param use_float16: Whether to use float16 precision.
         """
         self.model_path = model_path
-        self.vae = AutoencoderKL.from_pretrained(self.model_path)
+        self.vae = AutoencoderKLCompat.from_pretrained_kl(self.model_path)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()) else "cpu"))
         self.vae.to(self.device)

@@ -3,7 +3,8 @@ import time
 
 import numpy as np
 import torch
-from transformers import AutoFeatureExtractor, WhisperModel
+
+from .models.whisper_encoder import WhisperEncoderCompat, WhisperFeatureExtractorCompat
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -12,8 +13,8 @@ weight_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
 class Audio2Feature:
     def __init__(self, whisper_model_type="tiny", model_path="./models/whisper"):
-        self.feature_extractor = AutoFeatureExtractor.from_pretrained(model_path)
-        self.whisper = WhisperModel.from_pretrained(model_path)
+        self.feature_extractor = WhisperFeatureExtractorCompat()
+        self.whisper = WhisperEncoderCompat.from_pretrained_whisper(model_path)
         self.whisper = self.whisper.to(device=device, dtype=weight_dtype).eval()
         self.whisper.requires_grad_(False)
 
@@ -155,14 +156,8 @@ class Audio2Feature:
         return chunks, meta
 
     def audio2feat(self, wav_data):
-        input_feature = self.feature_extractor(
-            wav_data,
-            return_tensors="pt",
-            sampling_rate=16000,
-        ).input_features
+        input_feature = self.feature_extractor(wav_data, sampling_rate=16000).input_features
         input_feature = input_feature.to(device).to(weight_dtype)
-        whisper_feature = self.whisper.encoder(
-            input_feature, output_hidden_states=True
-        ).hidden_states
+        whisper_feature = self.whisper(input_feature).hidden_states
         whisper_feature = torch.stack(whisper_feature, dim=2)
         return whisper_feature.squeeze(0).cpu().numpy()
