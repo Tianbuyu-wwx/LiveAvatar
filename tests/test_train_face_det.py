@@ -14,7 +14,6 @@ import numpy as np
 
 try:
     import torch
-
     import train_face_det as tfd  # noqa: E402  (imports torch itself)
 
     _HAVE_TORCH = True
