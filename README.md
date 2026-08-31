@@ -231,7 +231,7 @@ await pipeline.close_session("s1")
 await pipeline.stop()
 ```
 
-测试时可注入 fake `pool` / `publisher_factory`，300+ 个单测全部不依赖 torch / GPU。
+测试时可注入 fake `pool` / `publisher_factory`，470+ 个单测全部不依赖 torch / GPU。
 
 ## 目录结构
 
@@ -280,7 +280,7 @@ scripts/                 # download_models / download_gptsovits / prepare_avatar
                          # make_face_dataset / face_align / train_face_det /
                          # train_face_landmarks / accept_face_backend
 web/                     # 浏览器 demo（无构建，原生 JS：player.js 抖动缓冲 + canvas 合成）
-tests/                   # 50 文件、600+ 用例（协议/传输/自适应/星型架构/人脸/端到端，CPU-only）
+tests/                   # 49 文件、470+ 用例（协议/传输/自适应/星型架构/人脸/并发/端到端，CPU-only）
 third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练权重不入库）
 ```
 
@@ -300,6 +300,7 @@ third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练�
 - [x] ASR/TTS 插件接口草案（`liveavatar.plugins`；官方示例插件待发布）
 - [x] 更多发布后端（`liveavatar.sinks.PublishSink` 协议 + RTMP 后端）
 - [x] 自研 WS 视频传输 + 区域编码 + 自适应质量（R2，默认启用）
+- [x] LiveKit 退役（M-C）：仅自研传输 + HS256 会话令牌 + 三路并发验证（`scripts/capacity_report.py`）
 - [ ] Apple Silicon (MPS) 支持
 
 ## 许可证
