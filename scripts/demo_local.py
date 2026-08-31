@@ -12,7 +12,6 @@ video transport:
 from __future__ import annotations
 
 import argparse
-import math
 import time
 
 import uvicorn
