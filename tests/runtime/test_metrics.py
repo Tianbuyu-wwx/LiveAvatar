@@ -41,8 +41,14 @@ class TestSessionMetrics(unittest.TestCase):
         m.record_interrupt()
         d1 = m.record_flush()
         d2 = m.record_flush()
-        self.assertEqual(d1, d2)
-        self.assertEqual(m.flush_count, 2)  # flush counted, window unchanged
+        # Both flushes measure from the SAME last interrupt (the window is
+        # not reset), so the second can only be >= the first on the
+        # monotonic clock. No new interrupt was recorded.
+        self.assertIsNotNone(d1)
+        self.assertIsNotNone(d2)
+        self.assertGreaterEqual(d2, d1)
+        self.assertEqual(m.interrupt_count, 1)
+        self.assertEqual(m.flush_count, 2)
 
     def test_first_to_playback_none_until_both_recorded(self):
         m = SessionMetrics(session_id="s1")
