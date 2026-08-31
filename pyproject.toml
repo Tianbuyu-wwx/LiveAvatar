@@ -54,6 +54,10 @@ omit = [
     # Torch/GPU inference module — covered by real-GPU integration runs,
     # not by CPU CI (fake-model tests run only where torch is installed).
     "src/liveavatar/musetalk_worker.py",
+    # R1 face models: torch-only; their tests are skipped in the light CI
+    # env (skipUnless(torch)), so exclude them from the coverage gate too.
+    "src/liveavatar/face_self.py",
+    "src/liveavatar/face_landmarks.py",
 ]
 
 [tool.coverage.report]
