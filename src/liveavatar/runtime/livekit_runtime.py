@@ -43,59 +43,15 @@ from liveavatar.runtime.worker import RealtimeWorker
 
 logger = logging.getLogger("liveavatar.runtime.livekit")
 
-# Optional: remote adapters for a RealtimeAsr-compatible microservice.
-try:
-    from liveavatar.audio_in.adapters.realtime_asr_client import RealtimeAsrClient
-    from liveavatar.audio_in.adapters.remote_asr import RemoteAsrAdapter
-    from liveavatar.audio_in.adapters.remote_eou import RemoteEouAdapter
-    from liveavatar.audio_in.adapters.remote_vad import RemoteVadAdapter
-
-    _HAS_REMOTE = True
-except Exception:
-    _HAS_REMOTE = False
-    RealtimeAsrClient = None  # type: ignore
-    RemoteAsrAdapter = None  # type: ignore
-    RemoteEouAdapter = None  # type: ignore
-    RemoteVadAdapter = None  # type: ignore
-
-# Optional: NLMS AEC for echo cancellation.
-try:
-    from liveavatar.audio_in.adapters.nlms_echo import NlmsAec
-
-    _HAS_AEC = True
-except Exception:
-    _HAS_AEC = False
-    NlmsAec = None  # type: ignore
-
-# Optional: voice pool + streaming TTS adapter.
-try:
-    from liveavatar.tts import NvcStreamingTtsAdapter
-    from liveavatar.voice.config import VoicePoolConfig
-    from liveavatar.voice.pool import VoicePool
-
-    _HAS_VOICE_POOL = True
-except Exception:
-    _HAS_VOICE_POOL = False
-    VoicePoolConfig = None  # type: ignore
-    VoicePool = None  # type: ignore
-    NvcStreamingTtsAdapter = None  # type: ignore
-
-# Optional: video avatar pool + streaming adapter.
-try:
-    from liveavatar.adapter import AvatarStreamingAdapter
-    from liveavatar.config import AvatarPoolConfig
-    from liveavatar.pool import AvatarPool
-    from liveavatar.static_worker import StaticAvatarWorker
-    from liveavatar.video_publisher import AvatarVideoPublisher
-
-    _HAS_AVATAR = True
-except Exception:
-    _HAS_AVATAR = False
-    AvatarStreamingAdapter = None  # type: ignore
-    AvatarPoolConfig = None  # type: ignore
-    AvatarPool = None  # type: ignore
-    StaticAvatarWorker = None  # type: ignore
-    AvatarVideoPublisher = None  # type: ignore
+from liveavatar.spokes import (  # noqa: E402
+    HAS_AVATAR,
+    build_tts_adapter,
+    resolve_aec,
+    resolve_avatar_adapter,
+    resolve_avatar_pool,
+    resolve_remote_asr,
+    resolve_voice_pool,
+)
 
 
 @dataclass
@@ -151,29 +107,14 @@ class LiveKitWorkerRuntime:
         # If asr_url is provided, create remote adapters backed by a shared
         # RealtimeAsrClient. The client connects in start(); the adapters are
         # injected into the worker so it uses the remote VAD/EOU/ASR pipeline.
-        self._asr_client: Any = None
-        remote_vad: Any = None
-        remote_eou: Any = None
-        remote_asr: Any = None
-        if asr_url and _HAS_REMOTE:
-            self._asr_client = RealtimeAsrClient(asr_url, session_id)
-            remote_vad = RemoteVadAdapter(self._asr_client)
-            remote_eou = RemoteEouAdapter(self._asr_client)
-            remote_asr = RemoteAsrAdapter(self._asr_client)
-        elif asr_url:
-            logger.warning(
-                "asr_url provided but realtime_audio.adapters not importable; "
-                "falling back to reference adapters"
-            )
+        remote = resolve_remote_asr(asr_url, session_id, logger=logger)
+        self._asr_client: Any = remote.client if remote else None
+        remote_vad: Any = remote.vad if remote else None
+        remote_eou: Any = remote.eou if remote else None
+        remote_asr: Any = remote.asr if remote else None
 
         # NLMS AEC for acoustic echo cancellation (numpy-only, in-process).
-        aec: Any = None
-        if enable_aec and _HAS_AEC:
-            aec = NlmsAec()
-        elif enable_aec:
-            logger.warning(
-                "enable_aec=True but NlmsAec not importable; AEC disabled"
-            )
+        aec: Any = resolve_aec(enable_aec, logger=logger)
 
         # ── Voice pool + streaming TTS adapter (Step 5) ──────────────
         # Resolve the pool: an externally-owned pool (shared across sessions)
@@ -185,16 +126,10 @@ class LiveKitWorkerRuntime:
         self._tts_adapter: Any = None
         self._lease_renew_interval = lease_renew_interval
         self._lease_renewer: asyncio.Task | None = None
-
-        if voice_pool is not None:
-            self._voice_pool = voice_pool
-            self._owns_pool = False
-        elif voice_pool_config is not None and _HAS_VOICE_POOL:
-            self._voice_pool = VoicePool(
-                voice_pool_config, worker_factory=voice_pool_worker_factory
-            )
-            self._owns_pool = True
-        elif char_id is not None:
+        self._voice_pool, self._owns_pool = resolve_voice_pool(
+            voice_pool, voice_pool_config, voice_pool_worker_factory
+        )
+        if self._voice_pool is None and char_id is not None:
             logger.warning(
                 "char_id provided but no voice_pool/voice_pool_config; "
                 "falling back to default FakeTts"
@@ -205,20 +140,13 @@ class LiveKitWorkerRuntime:
         # pre-built worker was supplied alongside pool+char_id, we honor the
         # worker as-is (caller manages TTS) and log a warning.
         tts_for_worker: Any = None
-        if (
-            worker is None
-            and self._voice_pool is not None
-            and char_id is not None
-            and _HAS_VOICE_POOL
-        ):
-            self._tts_adapter = NvcStreamingTtsAdapter(
-                pool=self._voice_pool,
-                session_id=session_id,
-                char_id=char_id,
-                sample_rate=16000,
+        if worker is None:
+            tts_for_worker = build_tts_adapter(
+                self._voice_pool, session_id, char_id or ""
             )
-            tts_for_worker = self._tts_adapter
-        elif worker is not None and char_id is not None and self._voice_pool is not None:
+            if tts_for_worker is not None:
+                self._tts_adapter = tts_for_worker
+        elif char_id is not None and self._voice_pool is not None:
             logger.warning(
                 "pre-built worker passed alongside voice_pool+char_id; "
                 "ignoring voice pool injection (caller manages TTS)"
@@ -237,16 +165,10 @@ class LiveKitWorkerRuntime:
         self._avatar_lease_renewer: asyncio.Task | None = None
         self._avatar_degrade_after_errors = avatar_degrade_after_errors
 
-        if avatar_pool is not None:
-            self._avatar_pool = avatar_pool
-            self._owns_avatar_pool = False
-        elif avatar_pool_config is not None and _HAS_AVATAR:
-            self._avatar_pool = AvatarPool(
-                avatar_pool_config,
-                worker_factory=avatar_pool_worker_factory,
-            )
-            self._owns_avatar_pool = True
-        elif avatar_id is not None:
+        self._avatar_pool, self._owns_avatar_pool = resolve_avatar_pool(
+            avatar_pool, avatar_pool_config, avatar_pool_worker_factory
+        )
+        if self._avatar_pool is None and avatar_id is not None:
             logger.warning(
                 "avatar_id provided but no avatar_pool/avatar_pool_config; "
                 "running in audio-only mode"
@@ -256,21 +178,18 @@ class LiveKitWorkerRuntime:
         # the runtime shouldn't own the adapter lifecycle (e.g. tests).
         if avatar_adapter is not None:
             self._avatar_adapter = avatar_adapter
-        elif (
-            self._avatar_pool is not None
-            and avatar_id is not None
-            and _HAS_AVATAR
-            and avatar_video_publisher is not None
-        ):
-            self._avatar_adapter = AvatarStreamingAdapter(
-                pool=self._avatar_pool,
-                publisher=avatar_video_publisher,
-                session_id=session_id,
-                avatar_id=avatar_id,
+        elif avatar_id is not None:
+            adapter = resolve_avatar_adapter(
+                self._avatar_pool,
+                session_id,
+                avatar_id,
+                avatar_video_publisher,
                 fallback_worker=avatar_fallback_worker,
                 degrade_after_errors=avatar_degrade_after_errors,
             )
-            self._avatar_video_publisher = avatar_video_publisher
+            if adapter is not None:
+                self._avatar_adapter = adapter
+                self._avatar_video_publisher = avatar_video_publisher
 
         self.worker = worker or RealtimeWorker(
             session_id,
@@ -343,7 +262,7 @@ class LiveKitWorkerRuntime:
 
         # Avatar video publisher shares the same room participant. Caller
         # may also pass a pre-built publisher (e.g. tests with a fake).
-        if self._avatar_video_publisher is not None and _HAS_AVATAR:
+        if self._avatar_video_publisher is not None and HAS_AVATAR:
             # If the publisher was passed in but not yet started, wire it to
             # the adapter's local participant and start it.
             if self._avatar_video_publisher.local_participant is None:

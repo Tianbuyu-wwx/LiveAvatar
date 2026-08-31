@@ -45,58 +45,26 @@ from typing import Any
 from liveavatar.runtime.metrics import SessionMetrics
 from liveavatar.runtime.queues import BoundedAsyncQueue
 from liveavatar.runtime.worker import RealtimeWorker
+from liveavatar.spokes import (
+    build_tts_adapter,
+    default_voice_pool_config,
+    resolve_aec,
+    resolve_avatar_adapter,
+    resolve_remote_asr,
+    resolve_text_source,
+    resolve_voice_pool,
+    static_fallback_worker,
+)
 
 logger = logging.getLogger("liveavatar.duplex")
 
-# Optional spokes — degrade gracefully when the extras are not installed.
-try:
-    from liveavatar.audio_in.adapters.realtime_asr_client import RealtimeAsrClient
-    from liveavatar.audio_in.adapters.remote_asr import RemoteAsrAdapter
-    from liveavatar.audio_in.adapters.remote_eou import RemoteEouAdapter
-    from liveavatar.audio_in.adapters.remote_vad import RemoteVadAdapter
-
-    _HAS_REMOTE = True
-except Exception:
-    _HAS_REMOTE = False
-
-try:
-    from liveavatar.audio_in.adapters.nlms_echo import NlmsAec
-
-    _HAS_AEC = True
-except Exception:
-    _HAS_AEC = False
-
+# PCM uplink framing (audio_in may be absent in light installs).
 try:
     from liveavatar.audio_in.frame import PCMFrame
 
     _HAS_AUDIO = True
 except Exception:
     _HAS_AUDIO = False
-
-try:
-    from liveavatar.tts import NvcStreamingTtsAdapter
-    from liveavatar.voice.config import VoicePoolConfig
-    from liveavatar.voice.pool import VoicePool
-
-    _HAS_VOICE_POOL = True
-except Exception:
-    _HAS_VOICE_POOL = False
-
-try:
-    from liveavatar.adapter import AvatarStreamingAdapter
-    from liveavatar.static_worker import StaticAvatarWorker
-    from liveavatar.worker import AvatarAssets
-
-    _HAS_AVATAR = True
-except Exception:
-    _HAS_AVATAR = False
-
-try:
-    from liveavatar.text_source import OpenAIChatTextSource
-
-    _HAS_TEXT_SOURCE = True
-except Exception:
-    _HAS_TEXT_SOURCE = False
 
 
 # 20 ms @ 16 kHz mono s16le — the canonical PCMFrame granularity.
@@ -165,80 +133,54 @@ class DuplexSession:
         self.metrics = metrics or SessionMetrics(session_id)
         self.lease_renew_interval = lease_renew_interval
 
-        # ── Spoke resolution (mirrors LiveKitWorkerRuntime) ──────────
-        self._asr_client: Any = None
-        remote_vad = remote_eou = remote_asr = None
-        if self.settings.asr_url and _HAS_REMOTE:
-            self._asr_client = RealtimeAsrClient(self.settings.asr_url, session_id)
-            remote_vad = RemoteVadAdapter(self._asr_client)
-            remote_eou = RemoteEouAdapter(self._asr_client)
-            remote_asr = RemoteAsrAdapter(self._asr_client)
-        elif self.settings.asr_url:
-            logger.warning(
-                "asr_url set but remote adapters unavailable; using reference ASR"
-            )
+        # ── Spoke resolution (shared with LiveKitWorkerRuntime) ─────
+        remote = resolve_remote_asr(self.settings.asr_url, session_id, logger=logger)
+        self._asr_client: Any = remote.client if remote else None
+        remote_vad = remote.vad if remote else None
+        remote_eou = remote.eou if remote else None
+        remote_asr = remote.asr if remote else None
 
-        aec: Any = None
-        if self.settings.enable_aec and _HAS_AEC:
-            aec = NlmsAec()
+        aec: Any = resolve_aec(self.settings.enable_aec, logger=logger)
 
-        # Voice pool: externally-owned takes precedence, else construct one.
+        # Voice pool: externally-owned takes precedence, else construct one
+        # (only meaningful with a char_id configured).
         self._voice_pool: Any = None
         self._owns_voice_pool = False
         self._tts_adapter: Any = None
         self._lease_renewer: asyncio.Task | None = None
-        tts_for_worker: Any = None
         if voice_pool is not None:
             self._voice_pool = voice_pool
-        elif self.settings.char_id and _HAS_VOICE_POOL:
-            self._voice_pool = VoicePool(VoicePoolConfig())
-            self._owns_voice_pool = True
-        if self._voice_pool is not None and self.settings.char_id and _HAS_VOICE_POOL:
-            self._tts_adapter = NvcStreamingTtsAdapter(
-                pool=self._voice_pool,
-                session_id=session_id,
-                char_id=self.settings.char_id,
-                sample_rate=16000,
+        elif self.settings.char_id:
+            self._voice_pool, self._owns_voice_pool = resolve_voice_pool(
+                None, default_voice_pool_config(), None
             )
-            tts_for_worker = self._tts_adapter
+        tts_for_worker = build_tts_adapter(
+            self._voice_pool, session_id, self.settings.char_id
+        )
+        if tts_for_worker is not None:
+            self._tts_adapter = tts_for_worker
 
         # LLM spoke.
-        text_source: Any = None
-        if self.settings.llm_base_url and self.settings.llm_model:
-            if _HAS_TEXT_SOURCE:
-                text_source = OpenAIChatTextSource(
-                    base_url=self.settings.llm_base_url,
-                    api_key=self.settings.llm_api_key,
-                    model=self.settings.llm_model,
-                    system_prompt=self.settings.llm_system_prompt,
-                )
-            else:
-                logger.warning("llm configured but text_source unavailable")
+        text_source: Any = resolve_text_source(
+            base_url=self.settings.llm_base_url,
+            api_key=self.settings.llm_api_key,
+            model=self.settings.llm_model,
+            system_prompt=self.settings.llm_system_prompt,
+            logger=logger,
+        )
 
         # Avatar spoke: caller passes the shared pool + a publisher sink.
         self._avatar_pool = avatar_pool
         self._avatar_adapter: Any = None
         self._avatar_lease_renewer: asyncio.Task | None = None
         self.sink = sink
-        if self._avatar_pool is not None and sink is not None and _HAS_AVATAR:
-            # Degradation fallback: with no on-disk assets the static worker
-            # emits a solid black frame (see StaticAvatarWorker._load_static_frame).
-            fallback_assets = AvatarAssets(
-                avatar_id=avatar_id,
-                data_dir="",
-                full_imgs_dir="",
-                coords_path="",
-                latents_path="",
-                mask_dir="",
-                mask_coords_path="",
-            )
-            self._avatar_adapter = AvatarStreamingAdapter(
-                pool=self._avatar_pool,
-                publisher=sink,
-                session_id=session_id,
-                avatar_id=avatar_id,
-                fallback_worker=StaticAvatarWorker(fallback_assets),
-            )
+        self._avatar_adapter = resolve_avatar_adapter(
+            self._avatar_pool,
+            session_id,
+            avatar_id,
+            sink,
+            fallback_worker=static_fallback_worker(avatar_id),
+        )
 
         self.worker = worker or RealtimeWorker(
             session_id,
