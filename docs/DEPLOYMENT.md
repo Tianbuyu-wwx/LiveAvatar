@@ -24,6 +24,9 @@ LiveAvatar 服务暴露 GPU 推理与 WebSocket 入口，公网部署前逐项�
 
 ## 3. 资源限额
 - `LIVEAVATAR_MAX_SESSIONS`：按 GPU 显存设置（默认 16 偏宽松，单卡建议 2-4）。
+  定容方法：GPU 空闲期运行 `python scripts/capacity_report.py --sessions N
+  --seconds 600`（真实 worker）取最大满足门禁（fps ≥ 20、打断 ≤ 90ms、零饥饿）
+  的 N，参考 docs/容量报告_2026-08-31.md（CPU 合成基线）。
 - `LIVEAVATAR_MAX_WS_FRAME_BYTES`：保持默认 64KB（PCM 100ms 块仅 ~3.2KB）。
 - `LIVEAVATAR_MAX_LOADED_WORKERS`：多 avatar 场景设置上限（如 2），防显存溢出。
 - 反向代理层再加 IP 级限流（如 nginx `limit_req`）。

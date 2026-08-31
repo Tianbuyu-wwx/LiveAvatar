@@ -304,7 +304,8 @@ third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练�
 - [x] ASR/TTS 插件接口草案（`liveavatar.plugins`；官方示例插件待发布）
 - [x] 更多发布后端（`liveavatar.sinks.PublishSink` 协议 + RTMP 后端）
 - [x] 自研 WS 视频传输 + 区域编码 + 自适应质量（R2，默认启用）
-- [x] LiveKit 退役（M-C）：仅自研传输 + HS256 会话令牌 + 三路并发验证（`scripts/capacity_report.py`）
+- [x] LiveKit 退役（M-C）：仅自研传输 + 三路并发验证（`scripts/capacity_report.py`）
+- [x] HS256 会话令牌接入服务（M-D）：短 TTL 签发 + WS 三种携带方式 + 门禁单测
 - [ ] Apple Silicon (MPS) 支持
 
 ## 许可证

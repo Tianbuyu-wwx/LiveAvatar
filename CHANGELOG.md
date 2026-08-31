@@ -2,6 +2,16 @@
 
 所有显著变更记录于此。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — M-E：会话令牌与容量报告验收
+
+### Added
+- DEPLOYMENT §3 新增定容方法：GPU 空闲期以 `scripts/capacity_report.py --sessions N --seconds 600`（真实 worker）取满足门禁的最大并发数，CPU 合成基线见 docs/容量报告_2026-08-31.md。
+- README roadmap 标注 M-C / M-D 完成项。
+
+### Verified（验收复跑，CPU-only）
+- 相关 56 项测试全过（令牌 13 + 容量门禁 6 + 三路并发 3 + 鉴权安全 + 会话令牌库）。
+- `capacity_report.py --sessions 3 --seconds 6` 实测复跑：fps / 打断 ≤ 90ms / 零饥饿门禁全过，出口带宽 1.71 Mbps。
+
 ## [Unreleased] — M-D：会话令牌接入服务
 
 ### Changed
