@@ -181,6 +181,7 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `LIVEAVATAR_MAX_WS_FRAME_BYTES` | `65536` | WS 二进制帧上限（超限丢弃，防 DoS） |
 | `LIVEAVATAR_TRANSPORT` | `ws` | 视频传输：`ws`（自研，默认）或 `livekit`（过渡，deprecated） |
 | `LIVEAVATAR_CODEC` | `mjpeg` | ws 传输编码：`mjpeg`（全帧）或 `region`（区域增量，需 avatar 的 `region.json`） |
+| `LIVEAVATAR_METRICS` | `off` | 置 `on` 启用 `GET /metrics`（Prometheus 文本格式：会话数/视频客户端/丢帧/编码错误/uptime） |
 | `LIVEAVATAR_ASR_URL` | *(空)* | duplex：RealtimeAsr 兼容 ASR 微服务 WS 地址（缺省用参考 ScriptedAsr） |
 | `LIVEAVATAR_LLM_BASE_URL` / `LIVEAVATAR_LLM_MODEL` | *(空)* | duplex：OpenAI 兼容 chat API（DeepSeek/Qwen/vLLM/Ollama），缺省 echo |
 | `LIVEAVATAR_LLM_API_KEY` / `LIVEAVATAR_LLM_SYSTEM_PROMPT` | *(空)* | duplex：LLM 鉴权与系统提示词 |

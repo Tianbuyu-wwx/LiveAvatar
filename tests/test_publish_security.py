@@ -134,6 +134,56 @@ class TestBodyValidation(PublishTestCase):
         self.assertEqual(resp.status_code, 200)
 
 
+class TestAvatarIdValidation(PublishTestCase):
+    """S4: avatar ids are path segments — reject escape payloads."""
+
+    def test_traversal_rejected(self):
+        resp = self.client.post(
+            "/v1/sessions", json={"avatar_id": "../yongen"}
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_path_separator_rejected(self):
+        for payload in ("a/b", "a\\b"):
+            resp = self.client.post("/v1/sessions", json={"avatar_id": payload})
+            self.assertEqual(resp.status_code, 422, payload)
+
+    def test_whitespace_and_unicode_rejected(self):
+        for payload in ("a b", "刻晴", "a\tb"):
+            resp = self.client.post("/v1/sessions", json={"avatar_id": payload})
+            self.assertEqual(resp.status_code, 422, payload)
+
+    def test_null_byte_rejected(self):
+        resp = self.client.post("/v1/sessions", json={"avatar_id": "a\x00b"})
+        self.assertEqual(resp.status_code, 422)
+
+    def test_duplex_mode_rejects_too(self):
+        resp = self.client.post(
+            "/v1/sessions", json={"avatar_id": "../yongen", "mode": "duplex"}
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_safe_charset_accepted(self):
+        resp = self.client.post(
+            "/v1/sessions", json={"avatar_id": "Yongen-2_1"}
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_valid_avatar_id_predicate(self):
+        from liveavatar.publish import _valid_avatar_id
+
+        self.assertTrue(_valid_avatar_id("yongen"))
+        self.assertTrue(_valid_avatar_id("A-b_9"))
+        self.assertFalse(_valid_avatar_id("../etc"))
+        self.assertFalse(_valid_avatar_id(""))
+
+    def test_region_encoder_invalid_id_falls_back(self):
+        from liveavatar.publish import _region_encoder_for
+
+        self.assertIsNone(_region_encoder_for("../escape"))
+        self.assertIsNone(_region_encoder_for("a/b"))
+
+
 class TestWsFrameLimit(PublishTestCase):
     def test_oversized_frame_dropped(self):
         state.settings.max_ws_frame_bytes = 64

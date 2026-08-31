@@ -62,6 +62,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -74,6 +75,16 @@ from .pipeline import AvatarPipeline, SessionState
 from .pool import AvatarNotFound, AvatarPoolError
 
 logger = logging.getLogger("liveavatar.publish")
+
+# S4: avatar ids become filesystem path segments (avatar_data_root/<id>) —
+# restrict to a safe charset so traversal/escape payloads are rejected at
+# session creation and before any path join.
+_AVATAR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _valid_avatar_id(avatar_id: str) -> bool:
+    return bool(_AVATAR_ID_RE.fullmatch(avatar_id))
+
 
 # Optional LiveKit RTC SDK (only needed when publishing into a room).
 try:
@@ -269,6 +280,8 @@ def _region_encoder_for(avatar_id: str) -> Any:
     missing / degenerate (caller falls back to full-frame MJPEG)."""
     from .region_codec import RegionFrameEncoder, load_region_json, region_spec_from_masks
 
+    if not _valid_avatar_id(avatar_id):
+        return None
     region_path = os.path.join(
         state.pool_config.avatar_data_root, avatar_id, "region.json"
     )
@@ -411,6 +424,7 @@ class CreateSessionBody(BaseModel):
     avatar_id: str | None = Field(
         default=None,
         max_length=64,
+        pattern=r"^[A-Za-z0-9_\-]+$",
         description="Avatar to lease; defaults to the first available.",
     )
     mode: str = Field(
@@ -448,6 +462,9 @@ def _check_ws_auth(websocket: WebSocket) -> bool:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Stop all sessions, the voice pool and the pipeline on shutdown."""
+    from .observability import configure_logging
+
+    configure_logging()
     yield
     for sid in list(state.duplex_sessions):
         session = state.duplex_sessions.pop(sid)
@@ -472,6 +489,29 @@ app = FastAPI(title="LiveAvatar", version="0.1.0", lifespan=_lifespan)
 @app.get("/health")
 async def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "livekit": state.settings.livekit_enabled})
+
+
+@app.get("/metrics")
+async def metrics_endpoint(request: Request) -> Any:
+    """Prometheus exposition (opt-in via LIVEAVATAR_METRICS=on)."""
+    unauthorized = _check_auth(request)
+    if unauthorized is not None:
+        return unauthorized
+    from .observability import (
+        _METRICS_CONTENT_TYPE,
+        METRICS_ENV,
+        metrics_enabled,
+        render_metrics,
+    )
+
+    if not metrics_enabled():
+        return JSONResponse(
+            {"error": f"metrics disabled (set {METRICS_ENV}=on)"},
+            status_code=404,
+        )
+    from fastapi.responses import Response
+
+    return Response(render_metrics(state), media_type=_METRICS_CONTENT_TYPE)
 
 
 @app.get("/v1/avatars")
@@ -505,6 +545,10 @@ async def create_session(
     body = body or CreateSessionBody()
     session_id = body.session_id or f"sess_{secrets.token_hex(8)}"
     avatar_id = body.avatar_id or _default_avatar_id()
+
+    # S4: reject unsafe avatar ids before any filesystem use (both modes).
+    if not _valid_avatar_id(avatar_id):
+        return JSONResponse({"error": "invalid avatar_id"}, status_code=400)
 
     if body.mode == "duplex":
         return await _open_duplex_session(session_id, avatar_id)
