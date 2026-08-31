@@ -203,8 +203,10 @@ def latents_cosine(path_a: str | Path, path_b: str | Path) -> float:
     """
     import torch
 
-    a = torch.load(path_a, map_location="cpu", weights_only=False)
-    b = torch.load(path_b, map_location="cpu", weights_only=False)
+    # weights_only=True: latents.pt files are plain lists of tensors as
+    # written by prepare_avatar — no pickle opcodes beyond tensors needed.
+    a = torch.load(path_a, map_location="cpu", weights_only=True)
+    b = torch.load(path_b, map_location="cpu", weights_only=True)
     if len(a) != len(b):
         raise ValueError(f"latents length mismatch: {len(a)} vs {len(b)}")
     cosines: list[float] = []

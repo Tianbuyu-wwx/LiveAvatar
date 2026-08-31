@@ -4,6 +4,14 @@
 
 ## [0.4.0] - 2026-08-31
 
+### Added — 全双工星型架构（duplex 模式）
+- **RealtimeWorker 中枢**（`runtime/worker.py`）：VAD/EOU/ASR → LLM → TTS 单事件循环辐条编排，epoch 打断权威唯一化。
+- **DuplexSession**（`duplex.py`）：WS 音频输入 ⇄ 数字人输出，20ms 分帧、AEC 前处理、avatar 降级链。
+- **GPT-SoVITS VoicePool**（`voice/`）：按角色 NvcWorker 进程内推理 + 泛型租约池，流式 TTS 适配 `NvcStreamingTtsAdapter`。
+- **输入辐条**（`audio_in/`）：PCM 分帧/有界缓冲、VAD/EOU/ASR 参考实现、远程适配器、NLMS AEC。
+- **文本辐条**（`text_source.py`）：OpenAI 兼容流式 chat 客户端（httpx2）+ 分句器。
+- **GPT-SoVITS 引擎代码 vendored** 到 `third_party/GPT_SoVITS/`（MIT）；预训练权重与大字典不入库，`scripts/download_gptsovits.py` 按需下载。
+
 ### Added — R2 传输层自研（默认启用）
 - **自研二进制视频协议 v1**（[docs/PROTOCOL.md](docs/PROTOCOL.md)，已冻结）：26 字节帧头（seq/epoch/pts/codec/flags/quality），`video_protocol` 纯函数编解码。
 - **自研 WS 传输**：`ws_sink.WebSocketSink`（实现 `PublishSink` 协议，多客户端扇出 + 丢帧/关键帧管理）+ `WS /v1/sessions/{sid}/video` 端点 + 浏览器 `web/player.js`（抖动缓冲、时钟同步、canvas 合成、`keyframe_request` 恢复）。
@@ -25,6 +33,10 @@
 ### Performance（实测，CPU）
 - 编码耗时 p50：region 0.24 ms / mjpeg 0.62 ms（512² 低熵合成，预算 2–5 ms）。
 - 端到端（真实 socket，128² 合成 worker）：启动延迟 3.5–3.9 ms，打断延迟 2.8–5.2 ms，断网 0.5s 重连恢复 7.7–45.1 ms，0 丢帧（详见 `docs/R2对比报告.md`）。
+
+### Security
+- 反序列化加固：`musetalk_worker` latents 加载启用 `torch.load(weights_only=True)`；R1 人脸 checkpoint / latents 同样收紧（自产格式均为纯张量 + 原始类型）。pickle 资产保留（MuseTalk 格式要求），README 新增「安全与信任边界」章节明确 avatar 资产只允许来自本机 `prepare_avatar.py`。
+- 版本号治理：`liveavatar.__version__` 与 `pyproject.toml` 同步为 0.4.0（此前 `__init__` 停留在 0.1.0）。
 
 ### Tests
 - 新增 100+ 测试：协议 roundtrip/容错、sink 丢帧/背压/epoch、区域编解码、自适应状态机、/video WS 集成、传输开关、多会话隔离、端到端反馈回路（TestClient）。

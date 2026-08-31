@@ -6,4 +6,4 @@ cancellation (interrupt stops video within one frame) and a
 MuseTalk → static-frame → audio-only degradation chain.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"

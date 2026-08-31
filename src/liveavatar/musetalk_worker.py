@@ -248,11 +248,16 @@ class MuseTalkAvatarWorker(AvatarWorker):
 
         assets = self.assets
 
+        # Trust boundary: avatar assets are produced by scripts/prepare_avatar.py
+        # on this machine. Only feed assets from a trusted source — pickle and
+        # torch checkpoints can execute arbitrary code if tampered with.
         with open(assets.coords_path, "rb") as f:
             self._coord_list = pickle.load(f)
         with open(assets.mask_coords_path, "rb") as f:
             self._mask_coords_list = pickle.load(f)
-        self._input_latent_list = torch.load(assets.latents_path, map_location="cpu")
+        self._input_latent_list = torch.load(
+            assets.latents_path, map_location="cpu", weights_only=True
+        )
 
         img_list = sorted(
             glob.glob(os.path.join(assets.full_imgs_dir, "*.[jpJP][pnPN]*[gG]")),

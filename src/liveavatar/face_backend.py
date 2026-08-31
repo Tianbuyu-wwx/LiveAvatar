@@ -134,7 +134,11 @@ def _require_torch() -> None:
 def _load_torch_checkpoint(path: Path, kind: str) -> dict:
     import torch
 
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    # weights_only=True: checkpoints are written by our own R1 training
+    # scripts as plain dicts (state_dict tensors + int/str metadata), which
+    # is exactly the payload class weights_only permits. This blocks
+    # arbitrary code execution from tampered .pt files.
+    ckpt = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(ckpt, dict) or "model" not in ckpt:
         raise ValueError(
             f"malformed {kind} checkpoint {path}: expected a dict with "

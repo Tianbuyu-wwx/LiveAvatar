@@ -291,6 +291,12 @@ tests/                   # 40+ 文件、300+ 用例（协议/传输/自适应/�
 third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练权重不入库）
 ```
 
+## 安全与信任边界
+
+- **API 鉴权**：公网部署必须设置 `LIVEAVATAR_API_KEY`（REST 走 `X-API-Key` 头，WS 走同名查询参数或头）。留空 = 仅限本机开发。
+- **avatar 资产信任边界**：`coords.pkl` / `mask_coords.pkl`（pickle）与 `latents.pt` / 人脸 checkpoint（torch）反序列化可执行任意代码。请**只使用本机 `scripts/prepare_avatar.py` 与 R1 训练脚本产出的资产**，切勿加载来路不明的模型文件。代码侧已启用 `torch.load(weights_only=True)`（仅允许张量与原始类型）作为纵深防御。
+- **资源限制**：`LIVEAVATAR_MAX_WS_FRAME_BYTES`（默认 64 KB）限制单帧大小，`LIVEAVATAR_MAX_SESSIONS` 限制并发会话数。
+
 ## Roadmap
 
 - [x] 离线批量渲染（`python -m liveavatar.batch_renderer`）
