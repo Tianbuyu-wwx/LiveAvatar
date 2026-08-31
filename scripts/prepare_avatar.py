@@ -7,9 +7,12 @@ Generates the avatar data directory expected by ``MuseTalkAvatarWorker``:
 - mask/       : blending masks (grayscale, white=face region)
 - mask_coords.pkl : mask crop boxes [(x_s,y_s,x_e,y_e), ...]
 
-Face detection uses OpenCV YuNet (ONNX, ships via download_models.py).
-By default a 5-point face alignment step (MediaPipe) is applied first,
-which significantly improves MuseTalk lip-sync quality.
+Face detection uses a switchable backend (R1 M3):
+``--face-backend yunet|self`` (env ``FACE_BACKEND``) — OpenCV YuNet ONNX
+(legacy default) or the self-developed TinyFaceDetector. By default a
+5-point face alignment step is applied first (``--landmark-backend
+mediapipe|self``, env ``LANDMARK_BACKEND``), which significantly improves
+MuseTalk lip-sync quality.
 
 Usage:
     python scripts/prepare_avatar.py \\
@@ -84,46 +87,55 @@ def _extract_frames(video_path: str, out_dir: Path, max_frames: int, fps: int) -
     return paths
 
 
-def _detect_faces_yunet(
+def _detect_faces(
     frames: list,
     coords_path: Path,
     mask_coords_path: Path,
     *,
-    model_path: str,
+    backend: str | None = None,
+    yunet_model_path: str = "models/face_detection_yunet_2023mar.onnx",
+    det_ckpt_path: str = "weights/self/facedet_256.pt",
     bbox_shift: int = 5,
     conf_threshold: float = 0.7,
 ) -> tuple[list, list]:
-    """Detect face bboxes via OpenCV YuNet ONNX; write coords.pkl + mask_coords.pkl."""
-    import cv2
+    """Detect face bboxes → coords.pkl + mask_coords.pkl.
 
-    h, w = frames[0].shape[:2]
-    detector = cv2.FaceDetectorYN_create(
-        model_path,
-        "",
-        (w, h),
-        conf_threshold,
-        nms_threshold=0.3,
-        top_k=5000,
-    )
+    ``backend``: "yunet" (OpenCV ONNX, legacy default) or "self" (R1
+    self-developed detector); resolved via the ``FACE_BACKEND`` env var by
+    the face_backend factory when None.
+    """
+    from liveavatar.face_backend import detect_faces
+
+    boxes_per_frame: list[list] = [
+        detect_faces(
+            frame,
+            backend,
+            yunet_model_path=yunet_model_path,
+            det_ckpt_path=det_ckpt_path,
+            conf_threshold=conf_threshold,
+        )
+        for frame in frames
+    ]
 
     coords_list: list[tuple[int, int, int, int]] = []
     mask_coords_list: list[tuple[int, int, int, int]] = []
     placeholder = (0, 0, 0, 0)
 
-    for frame in frames:
+    for frame, boxes in zip(frames, boxes_per_frame):
         fh, fw = frame.shape[:2]
-        detector.setInputSize((fw, fh))
-        ok, faces = detector.detect(frame)
-        if not ok or faces is None or len(faces) == 0:
+        if not boxes:
             coords_list.append(placeholder)
             mask_coords_list.append(placeholder)
             continue
         # Pick the largest face.
-        areas = faces[:, 2] * faces[:, 3]
-        best = faces[int(np.argmax(areas))]
-        x, y, bw, bh = best[:4].astype(int)
-        x1, y1 = max(0, x), max(0, y)
-        x2, y2 = min(fw, x + bw), min(fh, y + bh)
+        best = max(boxes, key=lambda b: b.area)
+        x1, y1 = max(0, int(round(best.x1))), max(0, int(round(best.y1)))
+        x2, y2 = min(fw, int(round(best.x2))), min(fh, int(round(best.y2)))
+        bw, bh = x2 - x1, y2 - y1
+        if bw <= 0 or bh <= 0:
+            coords_list.append(placeholder)
+            mask_coords_list.append(placeholder)
+            continue
         # Expand bbox downward by bbox_shift fraction (MuseTalk convention).
         y2 = min(fh, int(y2 + bh * bbox_shift / 20.0))
         coords_list.append((x1, y1, x2, y2))
@@ -142,7 +154,7 @@ def _detect_faces_yunet(
         pickle.dump(mask_coords_list, f)
     print(
         f"[prepare] coords: {len(coords_list)} entries → {coords_path.name} "
-        f"+ {mask_coords_path.name}"
+        f"+ {mask_coords_path.name} (backend={backend or 'env'})"
     )
     return coords_list, mask_coords_list
 
@@ -239,8 +251,17 @@ def prepare_avatar(
     bbox_shift: int = 5,
     align: bool = True,
     align_size: int = 768,
+    face_backend: str | None = None,
+    landmark_backend: str | None = None,
+    det_ckpt: str | None = None,
+    lm_ckpt: str | None = None,
 ) -> str:
-    """Run the full preprocessing pipeline; return the avatar data dir."""
+    """Run the full preprocessing pipeline; return the avatar data dir.
+
+    ``face_backend``: "yunet" (default) or "self"; ``landmark_backend``:
+    "mediapipe" (default) or "self". None falls back to the ``FACE_BACKEND``
+    / ``LANDMARK_BACKEND`` env vars, then the legacy defaults.
+    """
 
     data_dir = Path(avatar_data_root) / avatar_id
     full_imgs_dir = data_dir / "full_imgs"
@@ -266,7 +287,13 @@ def prepare_avatar(
             )
             print(f"[prepare] aligning video with 5-point landmarks → {aligned_path}")
             align_video(
-                str(input_p), str(aligned_path), output_size=align_size, max_frames=max_frames
+                str(input_p),
+                str(aligned_path),
+                output_size=align_size,
+                max_frames=max_frames,
+                landmark_backend=landmark_backend,
+                det_ckpt=det_ckpt,
+                lm_ckpt=lm_ckpt,
             )
             aligned_input = str(aligned_path)
         elif input_p.is_file() and input_p.suffix.lower() in (
@@ -280,7 +307,14 @@ def prepare_avatar(
                 Path(tempfile.gettempdir()) / f"prepare_avatar_aligned_{avatar_id}.jpg"
             )
             print(f"[prepare] aligning image with 5-point landmarks → {aligned_path}")
-            if align_image(str(input_p), str(aligned_path), output_size=align_size):
+            if align_image(
+                str(input_p),
+                str(aligned_path),
+                output_size=align_size,
+                landmark_backend=landmark_backend,
+                det_ckpt=det_ckpt,
+                lm_ckpt=lm_ckpt,
+            ):
                 aligned_input = str(aligned_path)
             else:
                 print("[prepare] warning: face alignment failed, using original image")
@@ -314,11 +348,13 @@ def prepare_avatar(
         raise RuntimeError(f"no readable frames from {input_path}")
 
     # 2. Face detection → coords.pkl + mask_coords.pkl.
-    coords_list, mask_coords_list = _detect_faces_yunet(
+    coords_list, mask_coords_list = _detect_faces(
         frames,
         coords_path,
         mask_coords_path,
-        model_path=face_model_path,
+        backend=face_backend,
+        yunet_model_path=face_model_path,
+        det_ckpt_path=det_ckpt or "weights/self/facedet_256.pt",
         bbox_shift=bbox_shift,
     )
     if all(c == (0, 0, 0, 0) for c in coords_list):
@@ -378,6 +414,28 @@ def main() -> int:
     ap.add_argument("--bbox-shift", type=int, default=5)
     ap.add_argument("--no-align", action="store_true", help="skip 5-point face alignment")
     ap.add_argument("--align-size", type=int, default=768)
+    ap.add_argument(
+        "--face-backend",
+        choices=("yunet", "self"),
+        default=None,
+        help="face detection backend (default: FACE_BACKEND env or yunet)",
+    )
+    ap.add_argument(
+        "--landmark-backend",
+        choices=("mediapipe", "self"),
+        default=None,
+        help="5-point landmark backend (default: LANDMARK_BACKEND env or mediapipe)",
+    )
+    ap.add_argument(
+        "--det-ckpt",
+        default=None,
+        help="self detector checkpoint (default: weights/self/facedet_256.pt)",
+    )
+    ap.add_argument(
+        "--lm-ckpt",
+        default=None,
+        help="self landmark checkpoint (default: weights/self/landmarks5_128.pt)",
+    )
     args = ap.parse_args()
 
     prepare_avatar(
@@ -393,6 +451,10 @@ def main() -> int:
         bbox_shift=args.bbox_shift,
         align=not args.no_align,
         align_size=args.align_size,
+        face_backend=args.face_backend,
+        landmark_backend=args.landmark_backend,
+        det_ckpt=args.det_ckpt,
+        lm_ckpt=args.lm_ckpt,
     )
     return 0
 

@@ -106,6 +106,45 @@ def _resolve_model_path(model_path: str | None = None) -> Path:
     return ascii_tmp
 
 
+def _import_face_backend():
+    """Lazy import of the face_backend factory (liveavatar package)."""
+    try:
+        from liveavatar import face_backend
+    except ImportError as exc:
+        raise ImportError(
+            "the face-backend switch requires the liveavatar package; "
+            "install with `pip install -e .`"
+        ) from exc
+    return face_backend
+
+
+def _resolve_landmark_backend(arg: str | None) -> str:
+    fb = _import_face_backend()
+    return fb.resolve_backend(
+        arg,
+        fb.LANDMARK_BACKEND_ENV,
+        fb.DEFAULT_LANDMARK_BACKEND,
+        fb.LANDMARK_BACKEND_CHOICES,
+    )
+
+
+def _self_landmarks5_px(
+    frame: np.ndarray, det_ckpt: str | None, lm_ckpt: str | None
+) -> np.ndarray | None:
+    """Self-backend 5-point landmarks in *pixel* coords, or None if no face."""
+    fb = _import_face_backend()
+    pts = fb.landmarks5(
+        frame,
+        backend="self",
+        det_ckpt_path=det_ckpt or fb.DEFAULT_DET_CKPT,
+        lm_ckpt_path=lm_ckpt or fb.DEFAULT_LM_CKPT,
+    )
+    if pts is None:
+        return None
+    h, w = frame.shape[:2]
+    return pts * np.array([w, h], dtype=np.float32)
+
+
 def align_video(
     input_path: str,
     output_path: str,
@@ -113,10 +152,24 @@ def align_video(
     output_size: int = 768,
     max_frames: int | None = None,
     model_path: str | None = None,
+    landmark_backend: str | None = None,
+    det_ckpt: str | None = None,
+    lm_ckpt: str | None = None,
 ) -> int:
-    """Align faces in a video; return number of frames processed."""
-    mp = _ensure_mediapipe()
-    landmarker = _create_landmarker(_resolve_model_path(model_path))
+    """Align faces in a video; return number of frames processed.
+
+    ``landmark_backend``: "mediapipe" (default, VIDEO mode with tracking) or
+    "self" (R1 self-developed detector + landmark student); may also come
+    from the ``LANDMARK_BACKEND`` env var.
+    """
+    backend = _resolve_landmark_backend(landmark_backend)
+    use_mp = backend == "mediapipe"
+    if use_mp:
+        mp = _ensure_mediapipe()
+        landmarker = _create_landmarker(_resolve_model_path(model_path))
+    else:
+        mp = None
+        landmarker = None
 
     cap = cv2.VideoCapture(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -141,14 +194,19 @@ def align_video(
             break
 
         h, w = frame.shape[:2]
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = landmarker.detect_for_video(mp_image, int(timestamp_ms))
+        if use_mp:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = landmarker.detect_for_video(mp_image, int(timestamp_ms))
+            src_pts = None
+            if result.face_landmarks:
+                src_pts = get_landmarks_5(result.face_landmarks[0])
+                src_pts[:, 0] *= w
+                src_pts[:, 1] *= h
+        else:
+            src_pts = _self_landmarks5_px(frame, det_ckpt, lm_ckpt)
 
-        if result.face_landmarks:
-            src_pts = get_landmarks_5(result.face_landmarks[0])
-            src_pts[:, 0] *= w
-            src_pts[:, 1] *= h
+        if src_pts is not None:
             try:
                 aligned = align_frame(frame, src_pts, dst_pts, output_size)
                 writer.write(aligned)
@@ -180,29 +238,12 @@ def align_image(
     *,
     output_size: int = 768,
     model_path: str | None = None,
+    landmark_backend: str | None = None,
+    det_ckpt: str | None = None,
+    lm_ckpt: str | None = None,
 ) -> bool:
     """Align face in a single image; return True if a face was found."""
-    mp = _ensure_mediapipe()
-    from mediapipe.tasks.python.core.base_options import BaseOptions
-    from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
-        VisionTaskRunningMode as RunningMode,
-    )
-    from mediapipe.tasks.python.vision.face_landmarker import (
-        FaceLandmarker,
-        FaceLandmarkerOptions,
-    )
-
-    options = FaceLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(_resolve_model_path(model_path))),
-        running_mode=RunningMode.IMAGE,
-        num_faces=1,
-        min_face_detection_confidence=0.5,
-        min_face_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-        output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
-    )
-    landmarker = FaceLandmarker.create_from_options(options)
+    backend = _resolve_landmark_backend(landmark_backend)
 
     frame = cv2.imread(input_path)
     if frame is None:
@@ -212,21 +253,49 @@ def align_image(
     if frame is None:
         raise RuntimeError(f"cannot read image: {input_path}")
 
-    h, w = frame.shape[:2]
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-    result = landmarker.detect(mp_image)
+    src_pts: np.ndarray | None
+    if backend == "mediapipe":
+        mp = _ensure_mediapipe()
+        from mediapipe.tasks.python.core.base_options import BaseOptions
+        from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
+            VisionTaskRunningMode as RunningMode,
+        )
+        from mediapipe.tasks.python.vision.face_landmarker import (
+            FaceLandmarker,
+            FaceLandmarkerOptions,
+        )
 
-    ok = False
-    if result.face_landmarks:
-        src_pts = get_landmarks_5(result.face_landmarks[0])
-        src_pts[:, 0] *= w
-        src_pts[:, 1] *= h
-        try:
-            aligned = align_frame(frame, src_pts, get_template_5(output_size), output_size)
-            cv2.imwrite(output_path, aligned)
-            ok = True
-        except Exception as e:
-            print(f"[warn] image alignment failed: {e}")
-    landmarker.close()
-    return ok
+        options = FaceLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(_resolve_model_path(model_path))),
+            running_mode=RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=0.5,
+            min_face_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            output_face_blendshapes=False,
+            output_facial_transformation_matrixes=False,
+        )
+        landmarker = FaceLandmarker.create_from_options(options)
+
+        h, w = frame.shape[:2]
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = landmarker.detect(mp_image)
+        src_pts = None
+        if result.face_landmarks:
+            src_pts = get_landmarks_5(result.face_landmarks[0])
+            src_pts[:, 0] *= w
+            src_pts[:, 1] *= h
+        landmarker.close()
+    else:
+        src_pts = _self_landmarks5_px(frame, det_ckpt, lm_ckpt)
+
+    if src_pts is None:
+        return False
+    try:
+        aligned = align_frame(frame, src_pts, get_template_5(output_size), output_size)
+        cv2.imwrite(output_path, aligned)
+        return True
+    except Exception as e:
+        print(f"[warn] image alignment failed: {e}")
+        return False
