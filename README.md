@@ -190,7 +190,7 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `LIVEAVATAR_AEC` | `0` | duplex：启用纯 numpy NLMS 回声消除 |
 | `LIVEAVATAR_DUPLEX_AVATAR` | `0` | duplex：启用视频辐条（MuseTalk 生成口型视频） |
 
-服务端（`LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`LIVEKIT_ROOM`、`PUBLIC_LIVEKIT_URL`）仅 livekit 过渡模式需要，见 `liveavatar/publish.py`。
+服务端（`LIVEKIT_URL`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`、`LIVEKIT_ROOM`、`PUBLIC_LIVEKIT_URL`）仅 livekit 过渡模式需要，见 `liveavatar/publish/settings.py`。
 
 ## HTTP / WebSocket API
 
@@ -202,6 +202,7 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `GET /v1/avatars` | 列出可用 avatar |
 | `WS /v1/sessions/{id}/audio` | 二进制帧 = PCM S16LE；文本帧 = 控制消息 |
 | `WS /v1/sessions/{id}/video` | 订阅视频流（自研二进制协议，见 [docs/PROTOCOL.md](docs/PROTOCOL.md)） |
+| `GET /metrics` | Prometheus 文本格式指标（需 `LIVEAVATAR_METRICS=on`，鉴权同 REST） |
 | `GET /health` | 健康检查 |
 
 音频 WS 控制消息（JSON）：
@@ -248,8 +249,15 @@ await pipeline.stop()
 ```text
 src/liveavatar/
 ├── pipeline.py          # 编排器（池 + 会话 + PTS 时钟 + epoch）
-├── publish.py           # FastAPI 服务（/audio + /video WS 端点，push/duplex 双模式）
+├── publish/             # FastAPI 服务包（push/duplex 双模式）
+│   ├── routes.py            # REST 端点 + app 组装
+│   ├── ws_routes.py         # /audio + /video WS 端点
+│   ├── session_manager.py   # pipeline/voice-pool 生命周期 + duplex 会话 + LiveKit 房间
+│   ├── encoders.py          # 每会话发布器/编码器工厂 + avatar_id 校验
+│   ├── settings.py state.py tokens.py   # 配置 / 单例状态 / JWT 签发
 ├── duplex.py            # 全双工星型会话（WS 音频 ⇄ RealtimeWorker 辐条）
+├── spokes.py            # 可选辐条统一组装（ASR/LLM/TTS/AEC/Avatar，duplex 与 runtime 共用）
+├── observability.py     # /metrics Prometheus 导出 + TraceID 日志（自研零依赖）
 ├── preview.py           # 模式 B：wav → 本地窗口 / mp4
 ├── batch_renderer.py    # 离线批量渲染（CLI：python -m liveavatar.batch_renderer）
 ├── plugins.py           # ASR/TTS 插件接口
@@ -288,7 +296,7 @@ scripts/                 # download_models / download_gptsovits / prepare_avatar
                          # make_face_dataset / face_align / train_face_det /
                          # train_face_landmarks / accept_face_backend
 web/                     # 浏览器 demo（无构建，原生 JS：player.js 抖动缓冲 + canvas 合成）
-tests/                   # 40+ 文件、300+ 用例（协议/传输/自适应/星型架构/人脸/端到端，CPU-only）
+tests/                   # 50 文件、600+ 用例（协议/传输/自适应/星型架构/人脸/端到端，CPU-only）
 third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练权重不入库）
 ```
 
@@ -298,6 +306,7 @@ third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练�
 
 - **API 鉴权**：公网部署必须设置 `LIVEAVATAR_API_KEY`（REST 走 `X-API-Key` 头，WS 走同名查询参数或头）。留空 = 仅限本机开发。
 - **avatar 资产信任边界**：`coords.pkl` / `mask_coords.pkl`（pickle）与 `latents.pt` / 人脸 checkpoint（torch）反序列化可执行任意代码。请**只使用本机 `scripts/prepare_avatar.py` 与 R1 训练脚本产出的资产**，切勿加载来路不明的模型文件。代码侧已启用 `torch.load(weights_only=True)`（仅允许张量与原始类型）作为纵深防御。
+- **路径安全（S4）**：`avatar_id` 会拼进文件系统路径，服务端在会话创建与区域编码器处强制白名单 `^[A-Za-z0-9_-]+$`，路径穿越/分隔符/NUL 等载荷一律 400/422 拒绝。
 - **资源限制**：`LIVEAVATAR_MAX_WS_FRAME_BYTES`（默认 64 KB）限制单帧大小，`LIVEAVATAR_MAX_SESSIONS` 限制并发会话数。
 
 ## Roadmap
