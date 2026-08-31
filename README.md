@@ -67,7 +67,7 @@ epoch 打断权威仍在 worker：`cancel` 控制消息触发 `advance_epoch`，
 ```bash
 git clone https://github.com/<you>/LiveAvatar.git
 cd LiveAvatar
-pip install -e ".[vision,server]"   # 推理另需: pip install torch torchvision diffusers transformers einops
+pip install -e ".[vision,server]"   # 推理另需: pip install torch torchvision（TTS 另需 .[tts]）
 ```
 
 ### 2. 下载模型权重与 demo 数据
