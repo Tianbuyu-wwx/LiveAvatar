@@ -42,5 +42,11 @@ LiveAvatar 服务暴露 GPU 推理与 WebSocket 入口，公网部署前逐项�
   `frames_dropped_*`、`tier`、`smoothed_gap_rate`。
 
 ## 6. 内容合规
-- demo avatar（yongen）数据仅限研究用途，商用前替换为自备素材。
+- demo avatar（yongen）数据仅限研究用途，商用前替换为自备素材（自采指引见 README「准备一个 avatar」小节）。
 - 遵守所在地深度合成（deepfake）法规；对外产品建议加可见/隐式水印。
+
+## 7. 可选组件：RTMP 输出（外部二进制）
+- **主链路零外部二进制依赖**：默认视频分发为自研 `WebSocketSink`（帧编码经现有 WS 下发，浏览器 canvas/WebCodecs 播放）。
+- 仅当存在**硬性 RTMP 分发**需求时，`RtmpSink`（`src/liveavatar/sinks.py`）通过 stdin 子进程调用 `ffmpeg` 二进制（需在 PATH 上，无任何 Python 包依赖）。
+- RTMP 为可选旁路：`RtmpSink` 故障不影响主 sink；服务可不安装 ffmpeg 运行。
+- GPT-SoVITS TTS 引擎为 vendored 代码（来源与升级策略见 `third_party/GPT_SoVITS/README_SELF.md`），其基础权重经 `scripts/download_gptsovits.py` 拉取。

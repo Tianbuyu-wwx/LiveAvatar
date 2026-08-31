@@ -12,6 +12,8 @@ Total ≈ 1.4 GB. For faster downloads in China set HF_ENDPOINT=https://hf-mirro
 
 Usage:
     python scripts/download_gptsovits.py [--root <project_root>]
+
+Vendoring provenance and upgrade policy: third_party/GPT_SoVITS/README_SELF.md
 """
 
 from __future__ import annotations

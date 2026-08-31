@@ -102,6 +102,13 @@ python scripts/prepare_avatar.py \
 
 产出 `data/avatars/yongen/`（full_imgs / coords.pkl / latents.pt / mask/ / mask_coords.pkl）。默认带五点人脸对齐（`LANDMARK_BACKEND=mediapipe|self`，显著提升口型质量；自研 `self` 后端权重训练完成后将成为默认）。
 
+**推荐使用自采素材**：yongen 仅为来自 MuseTalk 上游仓库的离线示例（仅限非商业研究用途，商用前必须替换）。自采一份自己的素材即可彻底摆脱上游数据依赖：
+
+1. 拍摄 30s 左右、正脸朝向镜头、口型开合明显、光照稳定、背景安静的竖版视频（480p 即可）；
+2. 录一段 16kHz 单声道 16-bit PCM 的参考 wav（或从视频提取后重采样）；
+3. `python scripts/prepare_avatar.py --input 你的视频.mp4 --avatar-id <id> --avatar-data-root data/avatars`；
+4. 之后所有命令中的 `yongen` 换成你的 `<id>` 即可。
+
 ### 4. 模式 B：本地预览
 
 ```bash
