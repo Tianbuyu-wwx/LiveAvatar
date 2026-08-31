@@ -5,11 +5,17 @@ Downloads:
 2. models/sd-vae-ft-mse/ ← stabilityai/sd-vae-ft-mse (VAE)
 3. models/whisper/       ← openai/whisper-tiny (audio2feature)
 4. models/face_detection_yunet_2023mar.onnx ← OpenCV Zoo (face detection)
-5. models/mediapipe/face_landmarker.task ← MediaPipe (5-point alignment)
-6. data/video/yongen.mp4 + data/audio/*.wav ← MuseTalk GitHub demo
+5. data/video/yongen.mp4 + data/audio/*.wav ← MuseTalk GitHub demo
+
+Teacher assets (NOT runtime dependencies — R1 M5):
+- models/mediapipe/face_landmarker.task ← MediaPipe FaceLandmarker, used only
+  as the training-time teacher for pseudo-labeling own material
+  (scripts/make_face_dataset.py --own) and as the legacy alignment backend
+  during the transition. Fetch with ``--teacher``; requires ``pip install
+  mediapipe`` (the ``teacher`` extra).
 
 Usage:
-    python scripts/download_models.py [--root <project_root>] [--skip-models] [--skip-demo]
+    python scripts/download_models.py [--root <project_root>] [--skip-models] [--skip-demo] [--teacher]
 """
 
 from __future__ import annotations
@@ -98,20 +104,15 @@ def download_models(root: Path) -> None:
         ],
     )
 
-    # 4. YuNet face detection (OpenCV Zoo).
+    # 4. YuNet face detection (OpenCV Zoo) — transition-period default
+    #    detection backend; a single onnx resource file.
     _download_url(
         "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
         models / "face_detection_yunet_2023mar.onnx",
     )
 
-    # 5. MediaPipe face landmarker (5-point alignment).
-    _download_url(
-        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
-        models / "mediapipe" / "face_landmarker.task",
-    )
-
     print("\n=== model summary ===")
-    for name in ("musetalkV15", "sd-vae-ft-mse", "whisper", "mediapipe"):
+    for name in ("musetalkV15", "sd-vae-ft-mse", "whisper"):
         d = models / name
         if d.exists():
             files = sorted(f.name for f in d.iterdir())
@@ -122,6 +123,19 @@ def download_models(root: Path) -> None:
     for f in ("face_detection_yunet_2023mar.onnx",):
         p = models / f
         print(f"  {f}: {p.stat().st_size / 1e6:.1f} MB" if p.exists() else f"  {f}: MISSING")
+
+
+def download_teacher_assets(root: Path) -> None:
+    """Download the training-time teacher asset (MediaPipe face landmarker).
+
+    R1 M5: MediaPipe is no longer a runtime dependency — this asset is only
+    needed to pseudo-label own material (make_face_dataset.py --own) and for
+    the legacy alignment backend during the transition.
+    """
+    _download_url(
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+        root / "models" / "mediapipe" / "face_landmarker.task",
+    )
 
 
 def download_demo_data(root: Path) -> None:
@@ -146,6 +160,11 @@ def main() -> int:
     ap.add_argument("--root", default=str(default_root))
     ap.add_argument("--skip-models", action="store_true")
     ap.add_argument("--skip-demo", action="store_true")
+    ap.add_argument(
+        "--teacher",
+        action="store_true",
+        help="also download the MediaPipe teacher asset (training-time only)",
+    )
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -153,6 +172,8 @@ def main() -> int:
 
     if not args.skip_models:
         download_models(root)
+    if args.teacher:
+        download_teacher_assets(root)
     if not args.skip_demo:
         download_demo_data(root)
 

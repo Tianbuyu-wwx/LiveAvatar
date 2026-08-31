@@ -48,7 +48,9 @@ pip install -e ".[vision,server]"   # 推理另需: pip install torch torchvisio
 python scripts/download_models.py
 ```
 
-下载 `models/musetalkV15`（UNet）、`models/sd-vae-ft-mse`（VAE）、`models/whisper`（音频特征）、YuNet 人脸检测、MediaPipe 关键点，以及 yongen demo 视频与音频。
+下载 `models/musetalkV15`（UNet）、`models/sd-vae-ft-mse`（VAE）、`models/whisper`（音频特征）、YuNet 人脸检测（过渡期默认检测后端，单个 onnx 资源文件），以及 yongen demo 视频与音频。
+
+MediaPipe 关键点已不是运行依赖（R1 M5）：仅训练期教师标注自备素材时需要，用 `python scripts/download_models.py --teacher` 按需下载，并安装 `pip install -e ".[teacher]"`。
 
 ### 3. 准备一个 avatar
 
@@ -60,7 +62,7 @@ python scripts/prepare_avatar.py \
     --max-frames 8
 ```
 
-产出 `data/avatars/yongen/`（full_imgs / coords.pkl / latents.pt / mask/ / mask_coords.pkl）。默认带 MediaPipe 五点人脸对齐，显著提升口型质量。
+产出 `data/avatars/yongen/`（full_imgs / coords.pkl / latents.pt / mask/ / mask_coords.pkl）。默认带五点人脸对齐（`LANDMARK_BACKEND=mediapipe|self`，显著提升口型质量；自研 `self` 后端权重训练完成后将成为默认）。
 
 ### 4. 模式 B：本地预览（无需 LiveKit）
 
@@ -212,7 +214,8 @@ tests/                   # 300+ 个单测（含协议/传输/自适应/端到端
 | [MuseTalk](https://github.com/TMElyralab/MuseTalk) | MIT | 代码（本仓库 `musetalk/` 改编自上游）；其预训练模型可自由使用（含商用） |
 | [sd-vae-ft-mse](https://huggingface.co/stabilityai/sd-vae-ft-mse) | MIT | VAE |
 | [whisper-tiny](https://huggingface.co/openai/whisper-tiny) | MIT | 音频特征 |
-| [YuNet](https://github.com/opencv/opencv_zoo) / [MediaPipe](https://developers.google.com/mediapipe) | Apache-2.0 | 人脸检测 / 五点对齐 |
+| [YuNet](https://github.com/opencv/opencv_zoo) | Apache-2.0 | 人脸检测（过渡期默认后端，单个 onnx 资源文件） |
+| [MediaPipe](https://developers.google.com/mediapipe) | Apache-2.0 | 训练期教师标注专用（`teacher` extra），非运行依赖 |
 | [LiveKit](https://livekit.io/) | Apache-2.0 | 实时传输（可选过渡依赖，deprecated） |
 | MuseTalk demo 数据（yongen） | — | **仅限非商业研究用途**，来源见上游仓库 |
 

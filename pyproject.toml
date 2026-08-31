@@ -38,6 +38,9 @@ dev = [
     "ruff",
     "mypy",
 ]
+# R1 M5: MediaPipe is a training-time teacher only (pseudo-labeling own
+# material, legacy backend during transition) — NOT a runtime dependency.
+teacher = ["mediapipe"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
