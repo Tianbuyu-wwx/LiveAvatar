@@ -9,17 +9,24 @@ from __future__ import annotations
 import unittest
 
 import numpy as np
-import torch
 
-from liveavatar.face_self import (
-    ANCHOR_SIZES,
-    NUM_ANCHORS,
-    STRIDE,
-    TinyFaceDetector,
-    cxcywh_to_xyxy,
-    detection_loss,
-    nms,
-)
+try:
+    import torch
+
+    from liveavatar.face_self import (
+        ANCHOR_SIZES,
+        NUM_ANCHORS,
+        STRIDE,
+        TinyFaceDetector,
+        cxcywh_to_xyxy,
+        detection_loss,
+        nms,
+    )
+    _HAVE_TORCH = True
+except ImportError:  # CI installs light extras only; torch is optional there
+    _HAVE_TORCH = False
+
+_TORCH = unittest.skipUnless(_HAVE_TORCH, "torch not installed (light CI env)")
 
 
 def _synthetic_face_image(size: int = 256) -> np.ndarray:
@@ -30,6 +37,7 @@ def _synthetic_face_image(size: int = 256) -> np.ndarray:
     return img
 
 
+@_TORCH
 class ArchitectureTests(unittest.TestCase):
     def test_forward_shapes(self) -> None:
         model = TinyFaceDetector()
@@ -59,6 +67,7 @@ class ArchitectureTests(unittest.TestCase):
         )
 
 
+@_TORCH
 class NmsTests(unittest.TestCase):
     def test_suppresses_overlap_keeps_distinct(self) -> None:
         boxes = np.array(
@@ -76,6 +85,7 @@ class NmsTests(unittest.TestCase):
         np.testing.assert_allclose(xyxy, [[0, 0, 10, 10]])
 
 
+@_TORCH
 class OverfitTests(unittest.TestCase):
     def test_cpu_overfit_single_face_two_phases(self) -> None:
         """The loss must drop substantially within a few CPU steps on one

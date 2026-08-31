@@ -11,14 +11,21 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import torch
+
+try:
+    import torch
+
+    import train_face_det as tfd  # noqa: E402  (imports torch itself)
+
+    _HAVE_TORCH = True
+except ImportError:  # light CI env — torch-dependent training tests are skipped
+    _HAVE_TORCH = False
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "scripts"))
 
-import train_face_det as tfd  # noqa: E402
 
-
+@unittest.skipUnless(_HAVE_TORCH, "torch not installed (light CI env)")
 class TrainScriptTests(unittest.TestCase):
     def test_one_epoch_cpu_end_to_end(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="_facedet_"))
