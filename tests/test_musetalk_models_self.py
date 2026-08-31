@@ -287,6 +287,9 @@ def test_package_import_is_torch_free() -> None:
         "for _m in ('torch', 'torchvision', 'cv2'):\n"
         "    sys.modules[_m] = None\n"  # makes `import torch` raise ImportError
         "import liveavatar.musetalk\n"
+        "from liveavatar.musetalk.models.mel_frontend import mel_filterbank\n"
+        "import numpy as np\n"
+        "assert mel_filterbank().shape == (80, 201)\n"
         "assert liveavatar.musetalk.__all__ == [\n"
         "    'Audio2Feature', 'get_image_blending', 'load_all_model']\n"
         "print('ok')\n"

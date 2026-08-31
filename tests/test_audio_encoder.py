@@ -33,12 +33,14 @@ try:
     from liveavatar.musetalk.models.whisper_encoder import (
         WhisperEncoderCompat,
         WhisperFeatureExtractorCompat,
-        mel_filterbank,
     )
 except ImportError:  # pragma: no cover — torch-dependent model module
     WhisperEncoderCompat = None  # type: ignore[assignment]
     WhisperFeatureExtractorCompat = None  # type: ignore[assignment]
-    mel_filterbank = None  # type: ignore[assignment]
+
+# The mel filterbank is numpy-only and lives in a torch-free module, so it
+# imports (and runs) even in CI light environments.
+from liveavatar.musetalk.models.mel_frontend import mel_filterbank
 
 requires_torch = unittest.skipUnless(torch is not None, "torch not installed")
 requires_transformers = unittest.skipUnless(
@@ -89,6 +91,7 @@ def test_mel_filterbank_matches_reference() -> None:
     np.testing.assert_allclose(mel_filterbank(), ref.T, atol=1e-6)
 
 
+@requires_torch
 def test_feature_extractor_shapes_and_determinism() -> None:
     extractor = WhisperFeatureExtractorCompat()
     rng = np.random.default_rng(7)
@@ -106,6 +109,7 @@ def test_feature_extractor_shapes_and_determinism() -> None:
     assert not torch.allclose(out.input_features, silent, atol=1e-3)
 
 
+@requires_torch
 def test_feature_extractor_rejects_bad_rate() -> None:
     extractor = WhisperFeatureExtractorCompat()
     try:
