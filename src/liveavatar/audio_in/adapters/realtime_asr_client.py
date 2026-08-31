@@ -74,21 +74,20 @@ class RealtimeAsrClient:
         self._eou_buf: collections.deque[dict[str, Any]] = collections.deque()
         self._ack_buf: collections.deque[dict[str, Any]] = collections.deque()
         self._send_lock = asyncio.Lock()
+        # Reconnect state (only used by connect_with_reconnect).
+        self._reconnect: bool = False
+        self._closing: bool = False
+        self._reconnect_task: asyncio.Task | None = None
 
     @property
     def is_connected(self) -> bool:
         return self._connected
 
-    async def connect(self) -> None:
-        """Open the WebSocket connection and start the reader task.
-
-        If ``websockets`` is not installed or the connection fails, the
-        client silently degrades — ``send_frame`` and ``drain_*`` become
-        no-ops.
-        """
+    async def _connect_once(self) -> bool:
+        """One connection attempt. True on success, False on failure/absent dep."""
         if not _HAS_WS:
             logger.warning("websockets not installed; RealtimeAsrClient disabled")
-            return
+            return False
         try:
             self._ws = await websockets.connect(self.url)
             start_msg = json.dumps(
@@ -102,9 +101,78 @@ class RealtimeAsrClient:
                 self.session_id,
                 self.url,
             )
+            return True
         except Exception as e:
             logger.error("RealtimeAsrClient connect failed: %s", e)
             self._connected = False
+            return False
+
+    async def connect(self) -> None:
+        """Open the WebSocket connection and start the reader task.
+
+        If ``websockets`` is not installed or the connection fails, the
+        client silently degrades — ``send_frame`` and ``drain_*`` become
+        no-ops.
+        """
+        await self._connect_once()
+
+    async def connect_with_reconnect(
+        self,
+        *,
+        base_delay: float = 1.0,
+        backoff: float = 2.0,
+        max_delay: float = 30.0,
+    ) -> None:
+        """Connect with automatic reconnection after drops.
+
+        Tries to connect with exponential backoff until the first success
+        (returns once connected), then keeps a supervisor task running that
+        re-establishes the connection whenever the read loop ends (drop).
+        Stale events buffered from a dropped connection are discarded on
+        reconnect so the worker never sees pre-drop ASR state. ``close()``
+        stops the supervisor.
+        """
+        if not _HAS_WS:
+            logger.warning("websockets not installed; RealtimeAsrClient disabled")
+            return
+        self._reconnect = True
+        delay = base_delay
+        while not self._closing:
+            if await self._connect_once():
+                self._reconnect_task = asyncio.create_task(
+                    self._supervise(base_delay, backoff, max_delay)
+                )
+                return
+            await asyncio.sleep(delay)
+            delay = min(delay * backoff, max_delay)
+
+    async def _supervise(self, base_delay: float, backoff: float, max_delay: float) -> None:
+        """Await the reader task and reconnect with backoff when it ends."""
+        delay = base_delay
+        while self._reconnect and not self._closing:
+            reader = self._reader_task
+            if reader is not None:
+                try:
+                    await reader
+                except asyncio.CancelledError:
+                    pass
+            if not self._reconnect or self._closing:
+                return
+            logger.warning(
+                "RealtimeAsrClient connection lost session_id=%s; reconnecting in %.1fs",
+                self.session_id,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * backoff, max_delay)
+            # Discard events buffered by the dropped connection.
+            self._vad_buf.clear()
+            self._asr_buf.clear()
+            self._eou_buf.clear()
+            self._ack_buf.clear()
+            while not self._closing and not await self._connect_once():
+                await asyncio.sleep(delay)
+                delay = min(delay * backoff, max_delay)
 
     async def _read_loop(self) -> None:
         """Background task: read JSON events and buffer by type."""
@@ -210,6 +278,15 @@ class RealtimeAsrClient:
 
     async def close(self) -> None:
         """Close the WebSocket connection and cancel the reader task."""
+        self._closing = True
+        self._reconnect = False
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
         self._connected = False
         if self._reader_task is not None:
             self._reader_task.cancel()

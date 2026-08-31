@@ -178,7 +178,12 @@ async def run_preview(args: argparse.Namespace) -> None:
         await adapter.stop()
         if writer is not None:
             writer.release()
-        cv2.destroyAllWindows()
+        try:
+            # headless OpenCV builds (CI / opencv-python-headless) have no
+            # highgui; destroyAllWindows raises there even when never shown.
+            cv2.destroyAllWindows()
+        except cv2.error:  # pragma: no cover - depends on the cv2 build
+            pass
         print(f"[preview] done: {shown} frames, adapter stats: {vars(adapter.stats)}")
     finally:
         await pool.release_async("preview")
