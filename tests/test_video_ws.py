@@ -352,8 +352,12 @@ class VideoWsInterruptTests(unittest.TestCase):
                 self.assertTrue(headers, f"no frames for {sid}")
                 seqs = [h.seq for h in headers]
                 self.assertEqual(seqs[0], 0, f"{sid} received foreign frame")
+                # Isolation requires a strictly increasing series that starts
+                # at this session's sink seq 0. Contiguity (no drops) is NOT
+                # guaranteed: the sink drops frames when a slow client's
+                # bounded queue fills up (e.g. on loaded CI runners).
                 self.assertEqual(
-                    seqs, list(range(len(seqs))), f"{sid} seq not contiguous"
+                    seqs, sorted(set(seqs)), f"{sid} seq not strictly increasing"
                 )
                 stats = self.client.get(f"/v1/sessions/{sid}/stats").json()
                 self.assertGreater(stats["publisher"]["frames_published"], 0)
