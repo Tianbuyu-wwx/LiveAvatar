@@ -336,6 +336,28 @@ def prepare_avatar(
         vae_model_dir=vae_model_dir, device=device, is_half=is_half,
     )
 
+    # 5. Region spec for the self-developed region-delta transport (M4):
+    #    union bounding box of the mouth masks → region.json. Missing /
+    #    degenerate masks simply skip the file (transport falls back to
+    #    full-frame MJPEG).
+    try:
+        from liveavatar.region_codec import (
+            region_spec_from_masks,
+            write_region_json,
+        )
+
+        spec = region_spec_from_masks(str(mask_dir), *frames[0].shape[1::-1])
+        if spec is None:
+            print("[prepare] warning: no usable mouth masks — region.json skipped")
+        else:
+            write_region_json(str(data_dir / "region.json"), spec)
+            print(
+                f"  region: ({spec.x},{spec.y}) {spec.w}x{spec.h}"
+                f" (region-delta transport ready)"
+            )
+    except ImportError:
+        print("[prepare] warning: liveavatar not importable — region.json skipped")
+
     print(f"\n[prepare] avatar '{avatar_id}' ready at {data_dir}")
     print(f"  full_imgs: {len(paths)} frames")
     print(f"  coords: {sum(1 for c in coords_list if c != (0, 0, 0, 0))} valid")

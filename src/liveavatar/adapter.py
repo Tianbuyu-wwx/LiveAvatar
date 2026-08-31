@@ -46,10 +46,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
+from ._common.loopqueue import LoopFreeQueue
 from .lease import CancelToken
 from .video_publisher import AvatarVideoPublisher
 from .worker import AvatarFrame, AvatarWorker
@@ -84,103 +84,9 @@ class _PendingChunk:
     epoch: int
 
 
-class _BoundedQueue:
-    """Bounded FIFO that survives event-loop changes.
-
-    ``asyncio.Queue`` caches the first event loop that awaits ``get()`` /
-    ``put()``; environments where the adapter is driven from *multiple*
-    loops (request-per-connection test portals, embedded hosting) then
-    crash the consumer with ``RuntimeError: ... is bound to a different
-    event loop``. This queue never caches a loop: every waiter creates its
-    future on its *own* running loop and is woken via
-    ``call_soon_threadsafe`` on the waiter's loop, so buffered chunks and
-    pending waiters survive loop/thread changes.
-
-    Implements the subset of the ``asyncio.Queue`` API the adapter uses:
-    ``put`` / ``get`` / ``get_nowait`` / ``empty`` / ``qsize``.
-    """
-
-    def __init__(self, maxsize: int) -> None:
-        self._maxsize = max(1, maxsize)
-        self._items: deque[_PendingChunk] = deque()
-        self._getters: list[asyncio.Future[_PendingChunk]] = []
-        self._putters: list[tuple[_PendingChunk, asyncio.Future[None]]] = []
-
-    def qsize(self) -> int:
-        return len(self._items)
-
-    def empty(self) -> bool:
-        return not self._items
-
-    async def get(self) -> _PendingChunk:
-        if self._items:
-            item = self._items.popleft()
-            self._wake_putter()
-            return item
-        fut: asyncio.Future[_PendingChunk] = (
-            asyncio.get_running_loop().create_future()
-        )
-        self._getters.append(fut)
-        try:
-            return await fut
-        finally:
-            try:
-                self._getters.remove(fut)
-            except ValueError:
-                pass
-
-    def get_nowait(self) -> _PendingChunk:
-        if not self._items:
-            raise asyncio.QueueEmpty
-        item = self._items.popleft()
-        self._wake_putter()
-        return item
-
-    async def put(self, item: _PendingChunk) -> None:
-        # Direct handoff to a waiting getter (buffer empty in that case).
-        while self._getters:
-            fut = self._getters.pop(0)
-            if not fut.cancelled():
-                self._set(fut, item)
-                return
-        if len(self._items) < self._maxsize:
-            self._items.append(item)
-            return
-        # Buffer full — wait for a getter to free a slot.
-        p_fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        self._putters.append((item, p_fut))
-        try:
-            await p_fut
-        finally:
-            try:
-                self._putters.remove((item, p_fut))
-            except ValueError:
-                pass
-
-    def _set(self, fut: asyncio.Future[Any], value: Any) -> None:
-        """Resolve ``fut`` on its own loop (works across loops/threads)."""
-        try:
-            fut.get_loop().call_soon_threadsafe(
-                _BoundedQueue._set_result, fut, value
-            )
-        except RuntimeError:
-            # Waiter's loop already closed — drop the dead waiter.
-            pass
-
-    @staticmethod
-    def _set_result(fut: asyncio.Future[Any], value: Any) -> None:
-        if not fut.cancelled():
-            fut.set_result(value)
-
-    def _wake_putter(self) -> None:
-        """A slot freed up: move one waiting item into the buffer."""
-        while self._putters:
-            item, fut = self._putters.pop(0)
-            if fut.cancelled():
-                continue
-            self._items.append(item)
-            self._set(fut, None)
-            return
+# Loop-free bounded FIFO: survives event-loop changes (request-per-loop
+# test portals) without crashing the consumer. See _common/loopqueue.py.
+_BoundedQueue = LoopFreeQueue
 
 
 class AvatarStreamingAdapter:
@@ -466,6 +372,8 @@ class AvatarStreamingAdapter:
         try:
             while True:
                 chunk = await self._queue.get()
+                if chunk is None:  # queue-closed sentinel
+                    continue
                 # Re-check epoch after dequeue — chunk may have gone stale
                 # while waiting in the queue.
                 if chunk.epoch < self._current_epoch:

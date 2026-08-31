@@ -2,6 +2,34 @@
 
 所有显著变更记录于此。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.0] - 2026-08-31
+
+### Added — R2 传输层自研（默认启用）
+- **自研二进制视频协议 v1**（[docs/PROTOCOL.md](docs/PROTOCOL.md)，已冻结）：26 字节帧头（seq/epoch/pts/codec/flags/quality），`video_protocol` 纯函数编解码。
+- **自研 WS 传输**：`ws_sink.WebSocketSink`（实现 `PublishSink` 协议，多客户端扇出 + 丢帧/关键帧管理）+ `WS /v1/sessions/{sid}/video` 端点 + 浏览器 `web/player.js`（抖动缓冲、时钟同步、canvas 合成、`keyframe_request` 恢复）。
+- **区域独立帧编码**（`region_codec`）：首帧全图 + 口型区域独立 JPEG 块，帧间底图哈希检测；512² 合成流带宽 1670→764 kbps（↓55%），真实素材预计 ↓70–80%。
+- **自适应质量**（`adaptive`）：客户端每 2s 上报拥塞信号（丢帧率/码率/fps），服务端 EWMA 聚合 + 5 档质量状态机（降快升慢 + 迟滞），弱网"降画质不冻结"。
+- **跨事件循环队列**（`_common.loopqueue.LoopFreeQueue`）：修复 `asyncio.Queue` 在多事件循环（TestClient / WS portal）下绑定循环崩溃导致的静默丢帧。
+- 测量工具：`scripts/wsperf.py`（合成/URL 双模式）、`scripts/e2e_bench.py`（真实 socket 端到端基准：启动/打断/重连延迟 + 带宽）。
+- 传输开关 `LIVEAVATAR_TRANSPORT`（`ws` 默认 / `livekit` 过渡）与 `LIVEAVATAR_CODEC`（`mjpeg` / `region`）。
+
+### Changed
+- **默认传输切换为自研 ws**：无外部基础设施即可运行浏览器 demo；LiveKit 相关环境变量仅在过渡模式需要。
+- docker-compose 移除 livekit 服务；README/DEPLOYMENT 按 ws 传输重写。
+- `livekit` extra 标记 **deprecated**（计划两个小版本后移除）。
+
+### Fixed
+- `/video` WS 客户端断开后 `send_bytes` 与 ASGI close 竞态抛 RuntimeError（现按正常断开处理）。
+- demo 区域编码：`region_spec_from_masks` 对缺失 mask 目录返回 None 而非抛异常；region.json 写入默认 avatar 目录。
+
+### Performance（实测，CPU）
+- 编码耗时 p50：region 0.24 ms / mjpeg 0.62 ms（512² 低熵合成，预算 2–5 ms）。
+- 端到端（真实 socket，128² 合成 worker）：启动延迟 3.5–3.9 ms，打断延迟 2.8–5.2 ms，断网 0.5s 重连恢复 7.7–45.1 ms，0 丢帧（详见 `docs/R2对比报告.md`）。
+
+### Tests
+- 新增 100+ 测试：协议 roundtrip/容错、sink 丢帧/背压/epoch、区域编解码、自适应状态机、/video WS 集成、传输开关、多会话隔离、端到端反馈回路（TestClient）。
+- CI 新增 Node 语法门禁（`node --check` 校验 web/ 下原生 JS，无构建链故不引入 vitest）。
+
 ## [0.3.0] - 2026-08-30
 
 ### Added

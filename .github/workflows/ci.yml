@@ -33,3 +33,20 @@ jobs:
 
       - name: Tests with coverage
         run: pytest --cov --cov-report=term-missing --cov-fail-under=80
+
+  web-syntax:
+    # The browser demo is dependency-free vanilla JS (no build chain), so a
+    # full vitest setup is not warranted; `node --check` gates syntax errors.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check (node --check)
+        run: |
+          for f in web/*.js; do
+            node --check "$f"
+          done

@@ -19,13 +19,20 @@ WebSocket protocol
     {"type": "cancel", "epoch": 4}    interrupt — drop stale audio+frames
     {"type": "stop"}                  flush and end
 
-LiveKit integration
--------------------
-When ``LIVEKIT_URL`` + ``LIVEKIT_API_KEY`` + ``LIVEKIT_API_SECRET`` are set,
-each session joins the configured room as a publisher bot and streams the
-avatar video track into it; the returned token lets the browser join the
-same room and subscribe. Without LiveKit config the service still runs
-(capture mode) — useful for tests and local previews.
+Video transport
+---------------
+``LIVEAVATAR_TRANSPORT`` selects the video delivery path:
+
+- ``ws`` (default): the self-developed transport — frames are encoded
+  (MJPEG) and fanned out by :class:`~liveavatar.ws_sink.WebSocketSink`;
+  browsers subscribe at ``WS /v1/sessions/{sid}/video`` and render with
+  ``web/player.js``. No extra infrastructure needed.
+- ``livekit``: each session joins the configured room as a publisher bot
+  (requires ``LIVEKIT_URL`` + ``LIVEKIT_API_KEY`` + ``LIVEKIT_API_SECRET``);
+  the returned token lets the browser join the same room and subscribe.
+
+Without any configuration the service still runs (capture mode) — useful
+for tests and local previews.
 
 Tokens are signed with the stdlib (HMAC-SHA256 JWT) — no extra dependency.
 
@@ -43,6 +50,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -75,6 +83,11 @@ class PublishSettings:
     livekit_api_key: str = ""
     livekit_api_secret: str = ""
     livekit_room: str = "liveavatar"
+    # Video transport: "ws" (self-developed, default) or "livekit".
+    transport: str = "ws"
+    # Self-developed ws codec: "mjpeg" (full frames) or "region"
+    # (region-delta patches; requires the avatar's region.json).
+    codec: str = "mjpeg"
     # Browser-reachable LiveKit URL (defaults to livekit_url).
     public_livekit_url: str = ""
     # Shared API key protecting REST + WS endpoints. Empty = auth disabled
@@ -88,7 +101,19 @@ class PublishSettings:
 
     @classmethod
     def from_env(cls) -> PublishSettings:
+        transport = os.getenv("LIVEAVATAR_TRANSPORT", "ws").strip().lower()
+        if transport not in ("ws", "livekit"):
+            raise ValueError(
+                f"LIVEAVATAR_TRANSPORT must be 'ws' or 'livekit', got {transport!r}"
+            )
+        codec = os.getenv("LIVEAVATAR_CODEC", "mjpeg").strip().lower()
+        if codec not in ("mjpeg", "region"):
+            raise ValueError(
+                f"LIVEAVATAR_CODEC must be 'mjpeg' or 'region', got {codec!r}"
+            )
         return cls(
+            transport=transport,
+            codec=codec,
             livekit_url=os.getenv("LIVEKIT_URL", ""),
             livekit_api_key=os.getenv("LIVEKIT_API_KEY", ""),
             livekit_api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
@@ -176,9 +201,68 @@ async def _ensure_pipeline() -> AvatarPipeline:
     """Lazily start the shared pipeline on first use."""
     async with state.start_lock:
         if state.pipeline is None:
-            state.pipeline = AvatarPipeline(state.pool_config)
+            state.pipeline = AvatarPipeline(
+                state.pool_config,
+                publisher_factory=_service_publisher_factory,
+            )
             await state.pipeline.start()
     return state.pipeline
+
+
+def _service_publisher_factory(session: SessionState) -> Any:
+    """Create the per-session video publisher for the service.
+
+    - LiveKit session (local_participant present) → LiveKit track publisher.
+    - Otherwise → self-developed WebSocketSink (R2 transport): frames are
+      encoded and fanned out to ``/v1/sessions/{sid}/video`` consumers.
+    """
+    if getattr(session, "local_participant", None) is not None:
+        from .video_publisher import AvatarVideoPublisher
+
+        cfg = state.pool_config
+        return AvatarVideoPublisher(
+            session.local_participant,
+            session.session_id,
+            width=cfg.width,
+            height=cfg.height,
+            target_fps=cfg.target_fps,
+        )
+    from .ws_sink import MjpegFrameEncoder, WebSocketSink
+
+    cfg = state.pool_config
+    encoder: Any = None
+    if state.settings.codec == "region":
+        encoder = _region_encoder_for(session.avatar_id)
+    return WebSocketSink(
+        encoder=encoder if encoder is not None else MjpegFrameEncoder(),
+        target_fps=cfg.target_fps,
+        width=cfg.width,
+        height=cfg.height,
+        quality=80,
+    )
+
+
+def _region_encoder_for(avatar_id: str) -> Any:
+    """RegionFrameEncoder for the avatar, or None when region.json is
+    missing / degenerate (caller falls back to full-frame MJPEG)."""
+    from .region_codec import RegionFrameEncoder, load_region_json, region_spec_from_masks
+
+    region_path = os.path.join(
+        state.pool_config.avatar_data_root, avatar_id, "region.json"
+    )
+    try:
+        spec = load_region_json(region_path)
+        return RegionFrameEncoder(spec)
+    except (OSError, ValueError, KeyError):
+        # No region.json — try to derive it from the masks on the fly.
+        mask_dir = os.path.join(
+            state.pool_config.avatar_data_root, avatar_id, "mask"
+        )
+        cfg = state.pool_config
+        mask_spec = region_spec_from_masks(mask_dir, cfg.width, cfg.height)
+        if mask_spec is None:
+            return None
+        return RegionFrameEncoder(mask_spec)
 
 
 async def _join_room(session_id: str) -> tuple[Any, Any]:
@@ -292,7 +376,7 @@ async def create_session(
     if unauthorized is not None:
         return unauthorized
     body = body or CreateSessionBody()
-    session_id = body.session_id or f"sess_{int(time.time() * 1000):x}"
+    session_id = body.session_id or f"sess_{secrets.token_hex(8)}"
     avatar_id = body.avatar_id or _default_avatar_id()
 
     pipeline = await _ensure_pipeline()
@@ -302,9 +386,25 @@ async def create_session(
             {"error": "session limit reached"}, status_code=429
         )
 
+    # Transport selection: "livekit" joins the room as a publisher bot;
+    # "ws" (default) leaves publisher creation to the service factory,
+    # which installs a WebSocketSink served at /v1/sessions/{sid}/video.
+    use_livekit = False
     room = participant = None
-    if state.settings.livekit_enabled:
-        room, participant = await _join_room(session_id)
+    if state.settings.transport == "livekit":
+        if not state.settings.livekit_enabled:
+            return JSONResponse(
+                {
+                    "error": "transport=livekit requires LIVEKIT_URL, "
+                    "LIVEKIT_API_KEY and LIVEKIT_API_SECRET"
+                },
+                status_code=503,
+            )
+        try:
+            room, participant = await _join_room(session_id)
+        except RuntimeError as exc:  # livekit SDK missing
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        use_livekit = True
 
     try:
         await pipeline.open_session(
@@ -325,11 +425,13 @@ async def create_session(
     resp: dict[str, Any] = {
         "session_id": session_id,
         "avatar_id": avatar_id,
-        "livekit": state.settings.livekit_enabled,
+        "transport": state.settings.transport,
+        "livekit": use_livekit,
         "sample_rate": 16000,
         "sample_format": "s16le",
+        "video_ws": f"/v1/sessions/{session_id}/video",
     }
-    if state.settings.livekit_enabled:
+    if use_livekit:
         resp["url"] = (
             state.settings.public_livekit_url or state.settings.livekit_url
         )
@@ -432,6 +534,117 @@ async def audio_ws(websocket: WebSocket, session_id: str) -> None:
         logger.info(
             "ws_disconnected",
             extra={"session_id": session_id, "samples": session.samples_pushed},
+        )
+
+
+# ────────────────────────────────────── video WS (self-developed transport)
+
+
+@app.websocket("/v1/sessions/{session_id}/video")
+async def video_ws(websocket: WebSocket, session_id: str) -> None:
+    """Subscribe to the session's avatar video stream (R2 transport).
+
+    Server → client: binary wire frames (docs/PROTOCOL.md), one JSON
+    ``ready`` message first. Client → server: JSON control messages
+    (``hello`` / ``feedback`` / ``keyframe_request``).
+    """
+    if not _check_ws_auth(websocket):
+        await websocket.close(code=4401, reason="unauthorized")
+        return
+    pipeline = await _ensure_pipeline()
+    session: SessionState | None = pipeline.get_session(session_id)
+    sink = getattr(session, "publisher", None) if session else None
+    from .video_protocol import (
+        VideoFrameHeader,
+        make_flags,
+        pack_video_frame,
+    )
+    from .ws_sink import EOF_SENTINEL, VideoClient, WebSocketSink
+
+    if not isinstance(sink, WebSocketSink):
+        await websocket.close(code=4404, reason="no video sink for session")
+        return
+
+    await websocket.accept()
+    client: VideoClient = sink.add_client()
+    logger.info(
+        "video_ws_connected",
+        extra={"session_id": session_id, "clients": sink.client_count},
+    )
+
+    async def _recv_loop() -> None:
+        """Consume client control messages until disconnect."""
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") in ("websocket.disconnect",):
+                    return
+                if (text := msg.get("text")) is not None:
+                    try:
+                        ctrl = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    ctype = ctrl.get("type")
+                    if ctype == "keyframe_request":
+                        sink.request_keyframe(client)
+                    elif ctype == "feedback":
+                        # M5 adaptive quality: client congestion report.
+                        sink.apply_feedback(client, ctrl)
+                    # hello: consumed, no-op.
+                elif msg.get("bytes") is not None:
+                    # Binary uplink is not part of the protocol.
+                    return
+        except Exception:  # pragma: no cover - disconnect noise
+            return
+
+    recv_task = asyncio.create_task(_recv_loop())
+    try:
+        cfg = state.pool_config
+        codec_names = {0: "mjpeg_full", 1: "region_delta"}
+        await websocket.send_json(
+            {
+                "type": "ready",
+                "codec": codec_names.get(sink._encoder.codec, "unknown"),
+                "target_fps": sink.target_fps or cfg.target_fps,
+                "width": cfg.width,
+                "height": cfg.height,
+            }
+        )
+        while True:
+            try:
+                wire = await asyncio.wait_for(client.queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                # Session gone without stop() (e.g. pipeline teardown)?
+                if pipeline.get_session(session_id) is None:
+                    break
+                continue
+            if wire is EOF_SENTINEL:
+                eof = pack_video_frame(
+                    VideoFrameHeader(
+                        flags=make_flags(eof=True),
+                        codec=0,
+                        quality=1,
+                        seq=0,
+                        epoch=sink.current_epoch,
+                        pts_us=0,
+                        width=cfg.width,
+                        height=cfg.height,
+                    ),
+                    b"",
+                )
+                await websocket.send_bytes(eof)
+                break
+            await websocket.send_bytes(wire)
+    except (WebSocketDisconnect, RuntimeError):
+        # RuntimeError: the ASGI transport rejects sends after the client
+        # already disconnected (close/completion race) — normal teardown.
+        pass
+    finally:
+        recv_task.cancel()
+        sink.remove_client(client)
+        logger.info(
+            "video_ws_disconnected",
+            extra={"session_id": session_id, "clients": sink.client_count},
         )
 
 

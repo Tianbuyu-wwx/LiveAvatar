@@ -48,6 +48,7 @@ class SessionState:
     adapter: AvatarStreamingAdapter | None = None
     publisher: AvatarVideoPublisher | None = None
     room: Any = None  # livekit rtc.Room when publishing via LiveKit
+    local_participant: Any = None  # livekit participant (kept for factories)
     # Monotonic PTS clock for sources that don't carry their own timestamps
     # (e.g. WebSocket PCM): advanced by the chunk duration on every push.
     next_pts_us: int = 0
@@ -137,6 +138,7 @@ class AvatarPipeline:
 
         state = SessionState(session_id=session_id, avatar_id=avatar_id)
         state.room = room
+        state.local_participant = local_participant
 
         # Publisher: LiveKit track, custom factory, or capture-mode (None).
         if self._publisher_factory is not None:
@@ -267,7 +269,12 @@ class AvatarPipeline:
         }
         pub = state.publisher
         if pub is not None and hasattr(pub, "stats"):
-            stats["publisher"] = vars(pub.stats)
+            pub_stats = pub.stats
+            # PublishSink protocol defines stats() as a method; legacy
+            # publishers expose a dataclass attribute.
+            stats["publisher"] = pub_stats() if callable(pub_stats) else vars(
+                pub_stats
+            )
         return stats
 
     def stats(self) -> dict[str, Any]:

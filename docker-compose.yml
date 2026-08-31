@@ -1,28 +1,13 @@
 services:
-  livekit:
-    image: livekit/livekit-server:latest
-    command: --config /etc/livekit.yaml
-    restart: unless-stopped
-    ports:
-      - "7880:7880"          # signaling (HTTP/WebSocket)
-      - "7881:7881"          # RTC over TCP
-      - "50000-60000:50000-60000/udp"  # media over UDP
-    volumes:
-      - ./livekit.yaml:/etc/livekit.yaml:ro
-
   liveavatar:
     build: .
     restart: unless-stopped
-    depends_on:
-      - livekit
     environment:
-      # LiveKit (must match livekit.yaml keys)
-      LIVEKIT_URL: ws://livekit:7880
-      LIVEKIT_API_KEY: devkey
-      LIVEKIT_API_SECRET: liveavatar-dev-secret
-      LIVEKIT_ROOM: liveavatar
-      # Browser joins via this public URL (change to your host):
-      PUBLIC_LIVEKIT_URL: ws://localhost:7880
+      # Video transport: self-developed ws transport is the default and
+      # needs no extra infrastructure. codec: "mjpeg" (full frames) or
+      # "region" (region-delta, requires each avatar's region.json).
+      LIVEAVATAR_TRANSPORT: ws
+      LIVEAVATAR_CODEC: mjpeg
       # Avatar inference
       LIVEAVATAR_DEVICE: cuda
       LIVEAVATAR_WHISPER_MODEL_PATH: /app/models/whisper
@@ -43,3 +28,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+# Legacy LiveKit transport (deprecated): set LIVEAVATAR_TRANSPORT=livekit
+# plus LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET and run
+# `docker run -p 7880:7880 -v ./livekit.yaml:/etc/livekit.yaml:ro livekit/livekit-server`
+# alongside this service if you still need it.
