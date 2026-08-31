@@ -23,9 +23,14 @@ acceptable for real-time audio and avoids blocking the worker's event loop.
 
 Graceful degradation
 --------------------
-If ``websockets`` is not installed or the connection fails, ``send_frame``
-and ``drain_*`` become no-ops returning empty lists. The worker continues
-to run (without VAD/EOU/ASR events) rather than crashing.
+If the connection cannot be established, ``send_frame`` and ``drain_*``
+become no-ops returning empty lists. The worker continues to run (without
+VAD/EOU/ASR events) rather than crashing.
+
+Transport
+---------
+Uses the self-written RFC 6455 client (:mod:`liveavatar.ws_client`) — the
+``websockets`` library is not a runtime dependency.
 """
 
 from __future__ import annotations
@@ -36,18 +41,10 @@ import json
 import logging
 from typing import Any
 
+from ... import ws_client
 from ..frame import PCMFrame
 
 logger = logging.getLogger("realtime_audio.adapters.client")
-
-# Optional dependency — gracefully degrade when absent.
-try:
-    import websockets  # type: ignore
-
-    _HAS_WS = True
-except Exception:  # pragma: no cover
-    _HAS_WS = False
-    websockets = None  # type: ignore
 
 
 class RealtimeAsrClient:
@@ -84,12 +81,9 @@ class RealtimeAsrClient:
         return self._connected
 
     async def _connect_once(self) -> bool:
-        """One connection attempt. True on success, False on failure/absent dep."""
-        if not _HAS_WS:
-            logger.warning("websockets not installed; RealtimeAsrClient disabled")
-            return False
+        """One connection attempt. True on success, False on failure."""
         try:
-            self._ws = await websockets.connect(self.url)
+            self._ws = await ws_client.connect(self.url)
             start_msg = json.dumps(
                 {"action": "start", "session_id": self.session_id, "sample_rate": 16000}
             )
@@ -110,9 +104,8 @@ class RealtimeAsrClient:
     async def connect(self) -> None:
         """Open the WebSocket connection and start the reader task.
 
-        If ``websockets`` is not installed or the connection fails, the
-        client silently degrades — ``send_frame`` and ``drain_*`` become
-        no-ops.
+        If the connection fails, the client silently degrades —
+        ``send_frame`` and ``drain_*`` become no-ops.
         """
         await self._connect_once()
 
@@ -132,9 +125,6 @@ class RealtimeAsrClient:
         reconnect so the worker never sees pre-drop ASR state. ``close()``
         stops the supervisor.
         """
-        if not _HAS_WS:
-            logger.warning("websockets not installed; RealtimeAsrClient disabled")
-            return
         self._reconnect = True
         delay = base_delay
         while not self._closing:

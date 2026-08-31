@@ -1,7 +1,7 @@
 """Tests for RealtimeAsrClient connect/read-loop/reconnect lifecycle.
 
 Uses a fake WebSocket object (async-iterable, records sends) and patches
-``websockets.connect`` to a scripted sequence of results, so reconnect
+``ws_client.connect`` to a scripted sequence of results, so reconnect
 semantics are deterministic without real sockets.
 """
 
@@ -16,8 +16,6 @@ from tests.conftest import wait_until as _wait_until
 
 from liveavatar.audio_in.adapters import realtime_asr_client as rac
 from liveavatar.audio_in.adapters.realtime_asr_client import RealtimeAsrClient
-
-skip_no_ws = unittest.skipUnless(rac._HAS_WS, "websockets not installed")
 
 
 class _Dropped(Exception):
@@ -53,7 +51,7 @@ class _FakeWs:
 
 
 def _patch_connect(results: list):
-    """Patch websockets.connect to pop from ``results`` (Exception → raise)."""
+    """Patch ws_client.connect to pop from ``results`` (Exception → raise)."""
     queue = list(results)
 
     async def fake_connect(url):
@@ -62,10 +60,9 @@ def _patch_connect(results: list):
             raise item
         return item
 
-    return mock.patch.object(rac.websockets, "connect", fake_connect)
+    return mock.patch.object(rac.ws_client, "connect", fake_connect)
 
 
-@skip_no_ws
 class TestConnect(unittest.IsolatedAsyncioTestCase):
     async def test_connect_sends_start_and_buffers_events(self):
         ws = _FakeWs(
@@ -101,7 +98,6 @@ class TestConnect(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(client._reader_task)
 
 
-@skip_no_ws
 class TestReconnect(unittest.IsolatedAsyncioTestCase):
     async def test_retries_until_first_success(self):
         with _patch_connect(
