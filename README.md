@@ -285,8 +285,12 @@ scripts/                 # download_models / download_gptsovits / prepare_avatar
                          # train_face_landmarks / accept_face_backend
 web/                     # 浏览器 demo（无构建，原生 JS：player.js 抖动缓冲 + canvas 合成）
 tests/                   # 51 文件、490+ 用例（协议/传输/自适应/星型架构/人脸/并发/令牌/端到端，CPU-only）
+docs/                    # PROTOCOL（ws 协议）/ DEPLOYMENT（生产部署+定容）/ 容量报告 / 自检与验收报告
 third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练权重不入库）
 ```
+
+生产部署（TLS / 鉴权 / 网络隔离 / 容量定容）见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)；
+并发容量基线与门禁见 [docs/容量报告_2026-08-31.md](docs/容量报告_2026-08-31.md)。
 
 ## 安全与信任边界
 
