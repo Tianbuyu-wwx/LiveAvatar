@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for the video wire protocol (docs/PROTOCOL.md, frozen at R2-M0).
 
 Pure functions — no I/O, no torch, no GPU.

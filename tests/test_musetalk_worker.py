@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for MuseTalkAvatarWorker with fake shared models (torch-gated).
 
 Runs where torch+cv2 exist; CI (no torch) skips the whole module.

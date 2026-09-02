@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 import unittest
 
 from liveavatar.audio_in.frame import FRAME_DURATION_US, SAMPLE_RATE, PCMFrame

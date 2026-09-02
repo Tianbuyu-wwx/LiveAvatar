@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """M-D: capacity-report scaffold gates (pure functions, CPU only).
 
 Covers the gate logic and markdown rendering of

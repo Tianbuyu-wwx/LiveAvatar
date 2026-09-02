@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """A2 (C5): self-written Whisper encoder + log-mel extractor tests.
 
 The real openai/whisper-tiny weights are NOT available in CI, so structural

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Generic worker pool with lease management and fair queuing.
 
 A pool manages a set of resource-pinned workers. Each worker is loaded once

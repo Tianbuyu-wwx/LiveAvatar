@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Smoke tests for the self-developed tiny face detector (R1 M1).
 
 All tests run on CPU in seconds: forward shapes, anchor/decode roundtrip,

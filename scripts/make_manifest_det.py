@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """One-off: build data/face_ds/manifest_det.jsonl for M1 retraining.
 
 - w300 entries: replace GT-derived tight boxes with YuNet detection boxes

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for the face backend factory (R1 M3).
 
 Covers backend resolution (arg > env > default), the yunet/mediapipe legacy

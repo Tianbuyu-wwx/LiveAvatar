@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Repo hygiene guards (C1 of the self-replace implementation plan).
 
 These tests prevent a repeat of the P0 defect where a bare ``models/``

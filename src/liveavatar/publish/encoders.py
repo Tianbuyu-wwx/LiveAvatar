@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Per-session video publisher/encoder factories (service wiring).
 
 S4: avatar ids become filesystem path segments (avatar_data_root/<id>) —

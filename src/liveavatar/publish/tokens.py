@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Session-token signing (stdlib HMAC-SHA256 HS256, no extra deps).
 
 Short-lived bearer tokens scoped to a single session (M-C task 17): the

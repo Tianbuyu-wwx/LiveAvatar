@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for preview helpers: load_wav_mono_16k, PreviewSink, run_preview."""
 
 from __future__ import annotations

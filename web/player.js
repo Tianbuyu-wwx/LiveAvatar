@@ -1,4 +1,8 @@
-/* AvatarPlayer — browser client for the self-developed video transport
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 LiveAvatar Contributors
+   Commercial use requires a separate written license; see ../LICENSE.
+
+   AvatarPlayer — browser client for the self-developed video transport
    (docs/PROTOCOL.md v1).
 
    Server → client: JSON "ready", binary wire frames, JSON none.

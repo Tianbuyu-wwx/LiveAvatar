@@ -8,7 +8,7 @@ version = "0.4.0"
 description = "Real-time streaming talking-head avatar: PCM audio in, MuseTalk lip-synced video out, delivered over a self-developed WebSocket transport."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-or-later" }
 dependencies = [
     "numpy",
     "pydantic>=2",

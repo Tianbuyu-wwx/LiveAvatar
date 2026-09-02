@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for DuplexSession (full-duplex star topology over WS, audio plane).
 
 Covers: PCM re-chunking, the mic → VAD/EOU/ASR → TTS loop with the

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Region-delta frame encoder (R2 M4 — self-developed codec).
 
 A digital-human video stream is mostly static: only the mouth region

@@ -1,4 +1,8 @@
-/* LiveAvatar web demo:
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 LiveAvatar Contributors
+   Commercial use requires a separate written license; see ../LICENSE.
+
+   LiveAvatar web demo:
    1. POST /v1/sessions → {session_id, video_ws}
    2. Render the /v1/sessions/{id}/video stream onto a canvas via
       AvatarPlayer (self-developed WS transport).

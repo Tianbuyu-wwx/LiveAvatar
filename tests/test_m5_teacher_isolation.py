@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """M5 guard tests: MediaPipe must stay OUT of the runtime dependency set.
 
 R1 M5 demoted MediaPipe to a training-time teacher (optional ``teacher``

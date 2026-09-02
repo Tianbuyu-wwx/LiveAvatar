@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Run the publish service on CPU with a synthetic worker (no GPU).
 
 Frames are an animated 128x128 pattern instead of real MuseTalk lip-sync;

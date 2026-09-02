@@ -2,6 +2,17 @@
 
 所有显著变更记录于此。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — 许可收紧：AGPL-3.0-or-later + 商业禁止
+
+### Changed (BREAKING)
+- **协议变更**：仓库自研代码从 MIT 收紧为 **AGPL-3.0-or-later**，并附加「严禁商业使用」限制（无书面商业授权禁止任何商业目的使用、SaaS、商业产品嵌入、广告/品牌代言等）；AGPL §13 网络服务源代码公开义务继续生效；**对历史版本一并回溯收紧**（见 `LICENSE §二`）。
+- 新增 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，明确 vendored / 运行时下载组件继续遵守各自上游许可，本仓库自研商业禁止不覆盖上游。
+- `pyproject.toml` `license = "AGPL-3.0-or-later"`。
+
+### Notes
+- 自研源码（含 `src/liveavatar/` 中除 `musetalk/` 派生段、`scripts/`、`tests/`、`web/`、`docs/` 中原创内容）受新协议约束；`third_party/GPT_SoVITS/`、`src/liveavatar/musetalk/` 派生段、第三方模型/素材继续遵守各自上游许可。
+- 商业授权联系渠道见 `SECURITY.md`。
+
 ## [Unreleased] — M-E：会话令牌与容量报告验收
 
 ### Added

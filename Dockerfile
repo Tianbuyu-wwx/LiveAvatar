@@ -1,4 +1,6 @@
 # LiveAvatar inference + serving image (CUDA).
+# Licensed under AGPL-3.0-or-later; commercial use requires a separate
+# written license from LiveAvatar Contributors (see SECURITY.md and LICENSE).
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Remote VAD adapter — delegates to the RealtimeAsr microservice.
 
 This adapter implements :class:`~realtime_audio.interfaces.VoiceActivityDetector`

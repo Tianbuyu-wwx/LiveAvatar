@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """R1 M1: train the self-developed face detector on an M0 manifest.
 
 Reads ``data/face_ds/manifest.jsonl`` (see scripts/make_face_dataset.py),

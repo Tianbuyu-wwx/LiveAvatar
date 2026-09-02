@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """M-C: three-way concurrency correctness (fake worker, CPU only).
 
 Three sessions run **simultaneously** (video + audio WS all open at the

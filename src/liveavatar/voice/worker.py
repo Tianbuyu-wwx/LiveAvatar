@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Character-specific TTS worker with fixed weights and async streaming.
 
 An ``NvcWorker`` wraps a GPT-SoVITS ``TTS`` instance whose weights are loaded

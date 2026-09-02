@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """NLMS (Normalized Least Mean Square) adaptive echo cancellation.
 
 Cancels acoustic echo from the student microphone signal using the Tutor

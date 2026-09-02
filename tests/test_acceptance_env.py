@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Environment acceptance tests for the three [待补] items of the R2
 report (docs/R2验收报告_2026-08-31.md §1.1 / §1.4 / §1.5).
 

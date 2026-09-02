@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """A1 (C4): self-written AutoencoderKLCompat / UNet2DConditionCompat tests.
 
 The real sd-vae-ft-mse / musetalkV15 weights are NOT available in CI, so

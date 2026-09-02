@@ -325,16 +325,26 @@ third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练�
 
 ## 许可证
 
-本项目代码以 [MIT](LICENSE) 发布。集成的上游组件遵守各自许可：
+本项目自研代码以 **AGPL-3.0-or-later** 发布，并附加**严禁商业使用**限制（即除非取得 LiveAvatar Contributors 书面商业授权，禁止任何以营利为目的、再分发、SaaS 出租、商业产品嵌入、广告/品牌代言等使用场景；AGPL §13 网络服务源代码公开义务继续生效）。完整许可文本见 [LICENSE](LICENSE)。
 
-| 组件 | 许可 | 说明 |
+> 本次收紧（2026-09-02 起，含本仓库所有历史版本）：任何下游新增的再分发、修改、SaaS 部署、网络服务公开使用或衍生作品，自该日起须同时遵守上述附加商业限制（见 LICENSE §二 "对历史版本的回溯收紧"）。
+
+如需商业使用，请通过仓库 SECURITY.md 中披露邮箱联系 LiveAvatar Contributors 单独获取商业许可。
+
+### 第三方组件
+
+vendored 与运行时下载的第三方组件继续遵守各自上游许可，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。摘要：
+
+| 组件 | 上游许可 | 本仓库角色 |
 |---|---|---|
-| [MuseTalk](https://github.com/TMElyralab/MuseTalk) | MIT | 代码（本仓库 `musetalk/` 改编自上游）；其预训练模型可自由使用（含商用） |
-| [sd-vae-ft-mse](https://huggingface.co/stabilityai/sd-vae-ft-mse) | MIT | VAE |
-| [whisper-tiny](https://huggingface.co/openai/whisper-tiny) | MIT | 音频特征 |
-| [YuNet](https://github.com/opencv/opencv_zoo) | Apache-2.0 | 人脸检测（过渡期默认后端，单个 onnx 资源文件） |
-| [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) | MIT | TTS 辐条（duplex 模式，`third_party/GPT_SoVITS`，可选依赖） |
-| [MediaPipe](https://developers.google.com/mediapipe) | Apache-2.0 | 训练期教师标注专用（`teacher` extra），非运行依赖 |
-| MuseTalk demo 数据（yongen） | — | **仅限非商业研究用途**，来源见上游仓库 |
+| MuseTalk | MIT（含商用） | 代码派生段（`src/liveavatar/musetalk/` 双许可：MIT + 本仓库 AGPL-3.0-or-later）；其预训练模型可商用 |
+| sd-vae-ft-mse | MIT | 运行时下载 VAE |
+| whisper-tiny | MIT | 运行时下载音频特征 |
+| YuNet | Apache-2.0 | 默认人脸检测（运行时下载 onnx） |
+| GPT-SoVITS | MIT（上游）；含 3D-Speaker、BigVGAN、PaddlePaddle 等子组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | vendored 引擎代码（`third_party/GPT_SoVITS/`） |
+| MediaPipe | Apache-2.0 | 训练期教师标注专用（`teacher` extra），非运行依赖 |
+| MuseTalk demo 数据（yongen） | **仅限非商业研究用途** | demo 素材，商用前必须替换 |
+
+> **重要**：本项目自研代码的「商业禁止」附加限制**仅约束本仓库自研部分**，不替代、不修改、不覆盖任何第三方组件的上游许可。如两者冲突，在第三方组件适用范围内以上游许可为准。
 
 使用数字人生成内容时请遵守当地法律法规，不得用于伪造他人身份等用途。

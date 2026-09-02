@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Pluggable publish sinks: RTMP (ffmpeg), preview, WebSocket (R2).
 
 A ``PublishSink`` is the narrow interface the streaming pipeline needs from

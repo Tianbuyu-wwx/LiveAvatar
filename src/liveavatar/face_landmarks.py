@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Self-developed 5-point landmark student (R1 M2) — PIPNet-style.
 
 Purpose (docs/自研人脸检测与对齐方案_2026-08-31.md §4 M2): replace the

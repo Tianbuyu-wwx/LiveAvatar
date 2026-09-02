@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """WebSocketSink — PublishSink backend that fans frames out to WS clients.
 
 The self-developed transport backend (R2): the sink encodes each

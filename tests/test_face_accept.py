@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for the M4 acceptance metrics (face_accept) and harness wiring.
 
 All synthetic + CPU-only: no mediapipe, no YuNet model, no checkpoints —

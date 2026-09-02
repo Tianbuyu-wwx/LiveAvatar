@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """A4 (C6): self-written RFC 6455 WebSocket client tests.
 
 Frame-encoding unit tests are dependency-free. Interop tests run the

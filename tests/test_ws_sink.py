@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for WebSocketSink (self-developed transport, R2 M1).
 
 Pure CPU: a fake encoder avoids cv2; one test exercises the real

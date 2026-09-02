@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Step 4 integration tests: RealtimeWorker streaming-TTS background path.
 
 Verifies that when a TTS backend exposing ``synthesize_stream`` is injected,

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Plugin interface for ASR / TTS backends (草案).
 
 Plugins are registered in an in-process registry, optionally discovered

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for the M0 face-dataset builder (R1 self-replacement pipeline).
 
 Synthetic fixtures only — real WIDER FACE / 300W downloads are not needed

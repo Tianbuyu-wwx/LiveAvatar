@@ -14,6 +14,11 @@
 - 渠道：仓库 **Security → Advisories → Report a vulnerability**（GitHub 私密披露），或在 Issue 中申请联系渠道。
 - 响应目标：48 小时内确认收到，7 天内给出初步评估。
 
+## 商业许可咨询
+
+本仓库自研代码以 **AGPL-3.0-or-later** 发布，并附加**严禁商业使用**限制（详见 [LICENSE](LICENSE)）。
+如需商业使用（SaaS、商业产品嵌入、广告/品牌代言、商业培训、商业演示等），请通过上述漏洞披露渠道联系 LiveAvatar Contributors 单独获取商业许可。
+
 ## 信任边界与关键安全设计
 
 LiveAvatar 是一个需要加载模型资产的实时数字人推理服务，请了解以下信任边界：

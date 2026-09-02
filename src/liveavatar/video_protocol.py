@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """LiveAvatar video transport wire protocol v1 — pure pack/unpack codecs.
 
 Implements the framing defined in ``docs/PROTOCOL.md`` (frozen at R2-M0,

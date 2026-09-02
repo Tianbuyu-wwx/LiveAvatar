@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """R1 M2: train the self-developed 5-point landmark student on an M0 manifest.
 
 Reads ``data/face_ds/manifest.jsonl`` entries that carry ``points5``

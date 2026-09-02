@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """End-to-end tests for the /v1/sessions/{sid}/video WS endpoint (R2 M1).
 
 Runs on TestClient (CPU only) with the fake ServicePool: audio WS pushes

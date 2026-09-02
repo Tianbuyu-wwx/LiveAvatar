@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for RealtimeAsrClient connect/read-loop/reconnect lifecycle.
 
 Uses a fake WebSocket object (async-iterable, records sends) and patches

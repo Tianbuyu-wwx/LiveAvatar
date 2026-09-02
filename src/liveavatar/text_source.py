@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """TextSource — LLM spoke interface (预留挂载点).
 
 A TextSource turns an utterance (e.g. ASR final text) into a stream of

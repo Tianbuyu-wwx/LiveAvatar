@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Tests for adaptive quality + feedback (R2 M5) — pure CPU.
 
 Covers: EWMA convergence, tier state machine (degrade fast / recover

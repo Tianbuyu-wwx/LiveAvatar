@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """AvatarWorker abstract base class and AvatarFrame data structure.
 
 Defines the streaming video inference interface that:

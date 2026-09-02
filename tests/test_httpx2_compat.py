@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 LiveAvatar Contributors
+# Commercial use requires a separate written license; see ../LICENSE.
+
 """Regression tests for the httpx2 compatibility fix (CI, 2026-08-31).
 
 The dev environment ships ``httpx2`` — Pydantic's maintained continuation
