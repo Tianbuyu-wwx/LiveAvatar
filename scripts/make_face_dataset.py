@@ -37,10 +37,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# 300W 68-point indices → 5-point template (ArcFace convention):
-# eye *centroids* (stable under blink), nose tip, mouth corners.
-_L_EYE = range(36, 42)
-_R_EYE = range(42, 48)
+# 300W 68-point indices → 5-point template. Semantics MUST match the
+# downstream legacy path (scripts/face_align.get_landmarks_5): *outer eye
+# corners* (not centroids), nose tip, mouth corners — otherwise the similarity
+# transform scale differs and M4 alignment gates can never pass.
+_L_EYE = 36   # 300W left-eye outer corner == MediaPipe mesh 33
+_R_EYE = 45   # 300W right-eye outer corner == MediaPipe mesh 263
 _NOSE = 30
 _MOUTH_L = 48
 _MOUTH_R = 54
@@ -52,8 +54,8 @@ def map68to5(pts68: np.ndarray) -> np.ndarray:
     if pts68.shape != (68, 2):
         raise ValueError(f"expected (68, 2) landmarks, got {pts68.shape}")
     pts5 = np.empty((5, 2), dtype=np.float32)
-    pts5[0] = pts68[36:42].mean(axis=0)  # left eye centroid
-    pts5[1] = pts68[42:48].mean(axis=0)  # right eye centroid
+    pts5[0] = pts68[36]  # left-eye outer corner
+    pts5[1] = pts68[45]  # right-eye outer corner
     pts5[2] = pts68[30]
     pts5[3] = pts68[48]
     pts5[4] = pts68[54]
@@ -82,30 +84,53 @@ def parse_pts(path: Path) -> np.ndarray:
 
 
 def parse_wider_annotations(path: Path) -> list[tuple[str, list[list[int]]]]:
-    """Parse a WIDER FACE ``bbox_train.txt``-style annotation file.
+    """Parse WIDER FACE bbox annotations (both split-file variants).
 
-    Line format: ``<rel path> <x>,<y>,<w>,<h>[,<lx>,<ly>,<blur>]...``.
-    Invalid boxes (WIDER marks unusable faces with negative values) and the
-    landmark triplets are ignored — we only need bboxes.
+    * inline: ``<rel> <x>,<y>,<w>,<h>[,...]`` on one line
+    * multiline (hf-mirror ``wider_face_split.zip``): rel-path line, a
+      face-count line, then ``<x> <y> <w> <h> <blur> ...`` per face
+    Invalid boxes (WIDER marks unusable faces with non-positive values) and
+    the landmark triplets are ignored — we only need bboxes.
     """
     entries: list[tuple[str, list[list[int]]]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines()]
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        tokens = line.split()
+        if not tokens or not tokens[0].lower().endswith((".jpg", ".jpeg", ".png")):
+            i += 1
             continue
-        items = line.split()
-        if not items[0].endswith((".jpg", ".png", ".jpeg")):
-            continue  # event header line ("0--Parade" totals row)
-        rel = items[0]
+        rel = tokens[0]
         boxes: list[list[int]] = []
-        for item in items[1:]:
-            parts = item.split(",")
-            if len(parts) < 4:
+        if len(tokens) > 1:  # inline variant
+            for item in tokens[1:]:
+                parts = item.split(",")
+                if len(parts) < 4:
+                    continue
+                x, y, w, h = (int(float(p)) for p in parts[:4])
+                if w <= 0 or h <= 0 or x < 0 or y < 0:
+                    continue  # WIDER "invalid face" marker
+                boxes.append([x, y, w, h])
+            i += 1
+        else:  # multiline variant
+            if i + 1 >= len(lines):
+                break
+            try:
+                count = int(lines[i + 1])
+            except ValueError:
+                i += 1
                 continue
-            x, y, w, h = (int(float(p)) for p in parts[:4])
-            if w <= 0 or h <= 0 or x < 0 or y < 0:
-                continue  # WIDER "invalid face" marker
-            boxes.append([x, y, w, h])
+            for j in range(i + 2, min(i + 2 + count, len(lines))):
+                parts = lines[j].split()
+                if len(parts) < 4:
+                    continue
+                x, y, w, h = (int(float(p)) for p in parts[:4])
+                if w <= 0 or h <= 0 or x < 0 or y < 0:
+                    continue  # WIDER "invalid face" marker
+                boxes.append([x, y, w, h])
+            i += 2 + count
         if boxes:
             entries.append((rel, boxes))
     return entries
@@ -207,27 +232,17 @@ def label_own_with_mediapipe(frame: np.ndarray) -> tuple[list[float], list[list[
 def _mp478_to_68_like(lm: np.ndarray) -> np.ndarray:
     """Select the 68 300W-equivalent indices out of MediaPipe's 478 points.
 
-    Only the 5 template sources are needed; the rest are unused.
+    Semantics match scripts/face_align.get_landmarks_5: outer eye corners
+    (mesh 33 / 263), nose tip (1), mouth corners (61 / 291).
     """
-    # MediaPipe FaceMesh index map (canonical mesh): eye corners/contours,
-    # nose tip, mouth corners.
-    sel = {
-        "l_eye": [33, 133, 160, 159, 158, 144],
-        "r_eye": [362, 263, 387, 386, 385, 380],
-        "nose": [1],
-        "mouth_l": [61],
-        "mouth_r": [291],
-    }
     out = np.empty((68, 2), dtype=np.float32)
-    for dst_idx, mp_idx in zip(_L_EYE, sel["l_eye"], strict=True):
-        out[dst_idx] = lm[mp_idx]
-    for dst_idx, mp_idx in zip(_R_EYE, sel["r_eye"], strict=True):
-        out[dst_idx] = lm[mp_idx]
-    out[30] = lm[sel["nose"][0]]
-    out[48] = lm[sel["mouth_l"][0]]
-    out[54] = lm[sel["mouth_r"][0]]
+    out[36] = lm[33]   # left-eye outer corner
+    out[45] = lm[263]  # right-eye outer corner
+    out[30] = lm[1]    # nose tip
+    out[48] = lm[61]   # mouth left corner
+    out[54] = lm[291]  # mouth right corner
     # Fill unused slots with NaN so a misuse of the full array is loud.
-    used = set(_L_EYE) | set(_R_EYE) | {30, 48, 54}
+    used = {36, 45, 30, 48, 54}
     for i in range(68):
         if i not in used:
             out[i] = np.nan
@@ -334,6 +349,17 @@ def build_manifest(args: argparse.Namespace) -> int:
                 else:
                     own_root = Path(args.own)
                     image_ref = str(own_root / name if own_root.is_dir() else own_root)
+                # The teacher bbox (and pts5) are already normalized to [0, 1];
+                # only clamp — running them through _norm_boxes_xywh would
+                # divide by the image size a second time (degenerate ~1e-4 boxes).
+                boxes = [
+                    [
+                        max(0.0, min(1.0, bbox[0])),
+                        max(0.0, min(1.0, bbox[1])),
+                        max(0.0, min(1.0, bbox[2])),
+                        max(0.0, min(1.0, bbox[3])),
+                    ]
+                ]
                 emit(
                     {
                         "image": image_ref,
@@ -341,7 +367,7 @@ def build_manifest(args: argparse.Namespace) -> int:
                         "height": h,
                         "source": "own",
                         "pseudo": True,
-                        "boxes": _norm_boxes_xywh([bbox], w, h),
+                        "boxes": boxes,
                         "points5": pts5,
                     }
                 )

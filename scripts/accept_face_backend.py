@@ -12,7 +12,7 @@ docs/自研人脸检测与对齐方案_2026-08-31.md:
 
 Usage:
     python scripts/accept_face_backend.py --input data/video/yongen.mp4 \
-        --det-ckpt weights/self/facedet_256.pt --lm-ckpt weights/self/landmarks5_128.pt \
+        --det-ckpt weights/self/facedet_256.pt --lm-ckpt weights/self/landmarks5_192_v2.pt \
         --out docs/face_accept_report.json
 
 Exits 0 when all evaluated gates pass, 1 on gate failure, 2 when a backend
@@ -39,6 +39,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
 _SRC_DIR = _SCRIPTS_DIR.parent / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))  # direct CLI run without editable install
+
+from face_align import mask_box_from_points5  # noqa: E402
 
 from liveavatar import face_accept as fa  # noqa: E402
 from liveavatar import face_backend as fb  # noqa: E402
@@ -102,31 +104,23 @@ def _warp_to_template(
     )
 
 
-def _mask_coords_from_boxes(
-    boxes_per_frame: list[list[fb.FaceBox]], frames: list[np.ndarray]
+def _mask_coords_from_landmarks(
+    pts_list: list[tuple[float, np.ndarray] | None],
+    frames: list[np.ndarray],
 ) -> list[tuple[int, int, int, int]]:
-    """Largest face per frame → padded mask crop box (prepare_avatar logic)."""
+    """Landmark-derived mask crop box per frame (face_align.mask_box_from_points5).
+
+    R1 strategy: the mask region depends only on the 5-point landmarks, so
+    the legacy/self comparison no longer hinges on detection-box agreement.
+    Frames without landmarks get the (0, 0, 0, 0) placeholder.
+    """
     coords: list[tuple[int, int, int, int]] = []
-    for frame, boxes in zip(frames, boxes_per_frame, strict=True):
+    for pts, frame in zip(pts_list, frames, strict=True):
         fh, fw = frame.shape[:2]
-        if not boxes:
+        if pts is None:
             coords.append((0, 0, 0, 0))
             continue
-        best = max(boxes, key=lambda b: b.area)
-        x1, y1 = max(0, int(round(best.x1))), max(0, int(round(best.y1)))
-        x2, y2 = min(fw, int(round(best.x2))), min(fh, int(round(best.y2)))
-        if x2 <= x1 or y2 <= y1:
-            coords.append((0, 0, 0, 0))
-            continue
-        pad = int((x2 - x1) * 0.25)
-        coords.append(
-            (
-                max(0, x1 - pad),
-                max(0, y1 - pad),
-                min(fw, x2 + pad),
-                min(fh, y2 + pad),
-            )
-        )
+        coords.append(mask_box_from_points5(pts, fw, fh))
     return coords
 
 
@@ -135,14 +129,17 @@ def run_acceptance(
     *,
     legacy_landmarks,
     self_landmarks,
-    legacy_detect=None,
-    self_detect=None,
     align_size: int = 768,
 ) -> dict:
     """Compare the two backends on the same frames; return the M4 report.
 
-    ``*_landmarks(frame) -> (5, 2) pixel points | None``; ``*_detect(frame)``
-    may be None to skip the mask-coords comparison.
+    ``*_landmarks(frame) -> (5, 2) pixel points | None``. The mask_coords
+    gate derives the mask boxes from the raw-frame 5-point landmarks of
+    each backend (R1 strategy: the mask region depends only on the points,
+    not the detection boxes). Re-regressing on the backend's own ALIGNED
+    frame was evaluated and rejected: the synthetic warp puts the face
+    outside both regressors' training distribution (13-30 px disagreement
+    on 768 px aligned frames), producing degenerate full-frame boxes.
     """
     from face_align import get_template_5
 
@@ -155,6 +152,8 @@ def run_acceptance(
     t_legacy = 0.0
     t_self = 0.0
     aligned_frames = 0
+    legacy_pts: list = []
+    self_pts: list = []
 
     for frame in frames:
         t0 = time.perf_counter()
@@ -164,6 +163,8 @@ def run_acceptance(
         t2 = time.perf_counter()
         t_legacy += t1 - t0
         t_self += t2 - t1
+        legacy_pts.append(pts_a)
+        self_pts.append(pts_b)
 
         if pts_a is None or pts_b is None:
             continue
@@ -185,14 +186,9 @@ def run_acceptance(
         "ssim": float(np.mean(ssims)) if ssims else None,
     }
 
-    if legacy_detect is not None and self_detect is not None:
-        coords_a = _mask_coords_from_boxes(
-            [legacy_detect(f) for f in frames], frames
-        )
-        coords_b = _mask_coords_from_boxes(
-            [self_detect(f) for f in frames], frames
-        )
-        report["mask_coords_iou"] = fa.average_mask_iou(coords_a, coords_b)
+    coords_a = _mask_coords_from_landmarks(legacy_pts, frames)
+    coords_b = _mask_coords_from_landmarks(self_pts, frames)
+    report["mask_coords_iou"] = fa.average_mask_iou(coords_a, coords_b)
 
     if len(frames) > 0 and t_legacy > 0:
         n = len(frames)
@@ -212,7 +208,6 @@ def main() -> int:
     ap.add_argument("--align-size", type=int, default=768)
     ap.add_argument("--det-ckpt", default=fb.DEFAULT_DET_CKPT)
     ap.add_argument("--lm-ckpt", default=fb.DEFAULT_LM_CKPT)
-    ap.add_argument("--yunet-model", default=fb.DEFAULT_YUNET_MODEL)
     ap.add_argument("--mp-model", default=fb.DEFAULT_MEDIAPIPE_MODEL)
     ap.add_argument("--latents-a", default=None, help="latents.pt from legacy backend")
     ap.add_argument("--latents-b", default=None, help="latents.pt from self backend")
@@ -237,19 +232,11 @@ def main() -> int:
         )
         return None if pts is None else pts * np.array([w, h], np.float32)
 
-    def legacy_detect(frame: np.ndarray) -> list[fb.FaceBox]:
-        return fb.detect_faces(frame, backend="yunet", yunet_model_path=args.yunet_model)
-
-    def self_detect(frame: np.ndarray) -> list[fb.FaceBox]:
-        return fb.detect_faces(frame, backend="self", det_ckpt_path=args.det_ckpt)
-
     try:
         report = run_acceptance(
             frames,
             legacy_landmarks=legacy_landmarks,
             self_landmarks=self_landmarks,
-            legacy_detect=legacy_detect,
-            self_detect=self_detect,
             align_size=args.align_size,
         )
     except (RuntimeError, FileNotFoundError, ValueError) as exc:

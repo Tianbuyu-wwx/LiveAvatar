@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 
 FACE_BACKEND_ENV = "FACE_BACKEND"
 LANDMARK_BACKEND_ENV = "LANDMARK_BACKEND"
+# "1"/"0" override for the 3×3 avg-pool decode (default: checkpoint value).
+LANDMARK_POOL_ENV = "LANDMARK_POOL"
 
 FACE_BACKEND_CHOICES = ("yunet", "self")
 LANDMARK_BACKEND_CHOICES = ("mediapipe", "self")
@@ -47,7 +49,15 @@ DEFAULT_LANDMARK_BACKEND = "mediapipe"
 
 # Checkpoints written by the R1 training scripts.
 DEFAULT_DET_CKPT = "weights/self/facedet_256.pt"
-DEFAULT_LM_CKPT = "weights/self/landmarks5_128.pt"
+DEFAULT_LM_CKPT = "weights/self/landmarks5_192_v2.pt"
+
+# Per-backend detection confidence default (round-4 calibration): the self
+# detector's focal-loss scores cap around 0.6-0.8 on hi-res stills, so 0.5
+# misses ~1/3 of 300W faces (93.5% → 67.5% recall); 0.35 keeps the gate
+# while the video domain (scores 0.72-0.81) is unaffected. YuNet keeps the
+# OpenCV-conventional 0.5.
+DEFAULT_DET_CONF = 0.5
+DEFAULT_SELF_DET_CONF = 0.35
 
 DEFAULT_YUNET_MODEL = "models/face_detection_yunet_2023mar.onnx"
 DEFAULT_MEDIAPIPE_MODEL = "models/mediapipe/face_landmarker.task"
@@ -87,6 +97,10 @@ class FaceBox:
     x2: float
     y2: float
     score: float = 1.0
+    # Optional 5-point landmarks in pixel coords, when the detector
+    # regresses them (YuNet does; the self detector does not — the M2
+    # landmark net runs separately).
+    points5: np.ndarray | None = None
 
     @property
     def area(self) -> float:
@@ -161,7 +175,12 @@ def load_det_model(ckpt_path: str | Path) -> tuple[TinyFaceDetector, int]:
         return _TORCH_CACHE[key]
     _require_torch()
     ckpt = _load_torch_checkpoint(path, "face-detector")
-    model: TinyFaceDetector = _face_self.TinyFaceDetector(width=int(ckpt.get("width", 48)))
+    # Anchor layout is per-checkpoint: new trainings record "anchor_sizes"
+    # (5 scales); legacy 3-anchor checkpoints fall back to the old layout.
+    sizes = tuple(ckpt.get("anchor_sizes") or _face_self.LEGACY_ANCHOR_SIZES)
+    model: TinyFaceDetector = _face_self.TinyFaceDetector(
+        width=int(ckpt.get("width", 48)), anchor_sizes=sizes
+    )
     model.load_state_dict(ckpt["model"])
     model.eval()
     result = (model, int(ckpt.get("input_size", 256)))
@@ -186,6 +205,12 @@ def load_lm_model(ckpt_path: str | Path) -> tuple[LandmarkNet5Self, int]:
     model: LandmarkNet5Self = _face_landmarks.LandmarkNet5Self(width=int(ckpt.get("width", 32)))
     model.load_state_dict(ckpt["model"])
     model.eval()
+    model.decode_mode = str(ckpt.get("decode_mode", "argmax"))
+    env_pool = os.environ.get(LANDMARK_POOL_ENV)
+    if env_pool is not None:
+        model.pool_before_argmax = env_pool.strip().lower() not in ("", "0", "false")
+    else:
+        model.pool_before_argmax = bool(ckpt.get("pool_before_argmax", False))
     result = (model, int(ckpt.get("input_size", 128)))
     _TORCH_CACHE[key] = result
     return result
@@ -196,23 +221,34 @@ def load_lm_model(ckpt_path: str | Path) -> tuple[LandmarkNet5Self, int]:
 # ---------------------------------------------------------------------------
 
 
+def resolve_det_conf(backend: str, conf_threshold: float | None) -> float:
+    """Per-backend detection-confidence default (None → 0.35 self / 0.5 yunet)."""
+    if conf_threshold is not None:
+        return conf_threshold
+    return DEFAULT_SELF_DET_CONF if backend == "self" else DEFAULT_DET_CONF
+
+
 def detect_faces(
     image_bgr: np.ndarray,
     backend: str | None = None,
     *,
     yunet_model_path: str = DEFAULT_YUNET_MODEL,
     det_ckpt_path: str = DEFAULT_DET_CKPT,
-    conf_threshold: float = 0.5,
+    conf_threshold: float | None = None,
 ) -> list[FaceBox]:
     """Detect faces in one BGR image; return pixel-space FaceBox list.
 
     ``backend`` is resolved via ``FACE_BACKEND`` (env) with fallback to
-    ``yunet``.
+    ``yunet``. ``conf_threshold=None`` resolves per backend (self 0.35,
+    yunet 0.5) — see ``resolve_det_conf``.
     """
-    name = resolve_backend(backend, FACE_BACKEND_ENV, DEFAULT_FACE_BACKEND, FACE_BACKEND_CHOICES)
+    name = resolve_backend(
+        backend, FACE_BACKEND_ENV, DEFAULT_FACE_BACKEND, FACE_BACKEND_CHOICES
+    )
+    conf = resolve_det_conf(name, conf_threshold)
     if name == "self":
-        return _detect_faces_self(image_bgr, det_ckpt_path, conf_threshold)
-    return _detect_faces_yunet(image_bgr, yunet_model_path, conf_threshold)
+        return _detect_faces_self(image_bgr, det_ckpt_path, conf)
+    return _detect_faces_yunet(image_bgr, yunet_model_path, conf)
 
 
 def _detect_faces_yunet(
@@ -250,16 +286,23 @@ def _detect_faces_yunet(
     ok, faces = detector.detect(image_bgr)
     if not ok or faces is None or len(faces) == 0:
         return []
-    return [
-        FaceBox(
-            x1=float(f[0]),
-            y1=float(f[1]),
-            x2=float(f[0] + f[2]),
-            y2=float(f[1] + f[3]),
-            score=float(f[-1]),
+    boxes: list[FaceBox] = []
+    for f in faces:
+        # YuNet regresses 5 landmarks per face (cols 4..13): right eye,
+        # left eye, nose tip, right/left mouth corner. Kept in detector
+        # order — the mask derivation is order-agnostic (symmetric means).
+        points5 = np.asarray(f[4:14], dtype=np.float32).reshape(5, 2)
+        boxes.append(
+            FaceBox(
+                x1=float(f[0]),
+                y1=float(f[1]),
+                x2=float(f[0] + f[2]),
+                y2=float(f[1] + f[3]),
+                score=float(f[-1]),
+                points5=points5,
+            )
         )
-        for f in faces
-    ]
+    return boxes
 
 
 def _detect_faces_self(
@@ -289,20 +332,26 @@ def landmarks5(
     mp_model_path: str = DEFAULT_MEDIAPIPE_MODEL,
     det_ckpt_path: str = DEFAULT_DET_CKPT,
     lm_ckpt_path: str = DEFAULT_LM_CKPT,
-    det_conf_threshold: float = 0.5,
+    det_conf_threshold: float | None = None,
 ) -> np.ndarray | None:
     """5-point landmarks for the primary face in one BGR image.
 
     Returns (5, 2) coordinates normalized to the full image (same convention
     as the MediaPipe teacher / the R1 manifest), or None when no face is
     found. ``backend`` is resolved via ``LANDMARK_BACKEND`` (env) with
-    fallback to ``mediapipe``.
+    fallback to ``mediapipe``. ``det_conf_threshold=None`` resolves per
+    detection backend (self 0.35, yunet 0.5) — see ``resolve_det_conf``.
     """
     name = resolve_backend(
         backend, LANDMARK_BACKEND_ENV, DEFAULT_LANDMARK_BACKEND, LANDMARK_BACKEND_CHOICES
     )
     if name == "self":
-        return _landmarks5_self(image_bgr, det_ckpt_path, lm_ckpt_path, det_conf_threshold)
+        return _landmarks5_self(
+            image_bgr,
+            det_ckpt_path,
+            lm_ckpt_path,
+            resolve_det_conf("self", det_conf_threshold),
+        )
     return _landmarks5_mediapipe(image_bgr, mp_model_path)
 
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import random
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -93,6 +95,119 @@ class DecodeTests(unittest.TestCase):
         target = gaussian_targets(gt, 8, 8, sigma=1.0)
         peak = target[0, 0].argmax()
         self.assertEqual(2 * 8 + 6, int(peak))
+
+
+@_TORCH
+class PooledDecodeTests(unittest.TestCase):
+    """3×3 avg-pool before argmax (round-3 anti-jitter measure)."""
+
+    def test_pool_flips_argmax_to_stable_neighbour(self) -> None:
+        grid = 8
+        hm = torch.zeros(1, NUM_POINTS, grid, grid)
+        off = torch.zeros(1, NUM_POINTS * 2, grid, grid)
+        # Isolated peak at (y=2, x=6): plain argmax picks it, but its 3×3
+        # neighbourhood average (peak + 8 zero cells) loses to a broad
+        # plateau centred at (y=2, x=2) — pooling picks the stable plateau.
+        hm[0, 0, 2, 6] = 5.0
+        hm[0, 0, 1:4, 1:4] = 1.2
+        pts_plain = LandmarkNet5Self.decode_landmarks(hm, off)[0]
+        pts_pooled = LandmarkNet5Self.decode_landmarks(hm, off, pool=True)[0]
+        self.assertAlmostEqual(float(pts_plain[0, 0]), 6 / grid, places=6)
+        self.assertAlmostEqual(float(pts_pooled[0, 0]), 2 / grid, places=6)
+
+    def test_pool_keeps_lone_gaussian_peak_within_one_cell(self) -> None:
+        """A well-separated Gaussian peak survives pooling (no drift)."""
+        grid = 32
+        gt = torch.tensor([[[0.75, 0.25], [0.3, 0.6], [0.5, 0.45], [0.4, 0.8], [0.6, 0.8]]])
+        hm = gaussian_targets(gt, grid, grid, sigma=1.5) * 4.0 - 2.0
+        off = torch.zeros(1, NUM_POINTS * 2, grid, grid)
+        plain = LandmarkNet5Self.decode_landmarks(hm, off)[0]
+        pooled = LandmarkNet5Self.decode_landmarks(hm, off, pool=True)[0]
+        # Same cell picked → offsets identical; coords must agree exactly.
+        np.testing.assert_allclose(pooled.numpy(), plain.numpy(), atol=1e-6)
+
+    def test_pool_ignored_in_soft_mode(self) -> None:
+        grid = 8
+        hm = torch.full((1, NUM_POINTS, grid, grid), -12.0)
+        hm[0, 0, 2, 3] = 12.0
+        off = torch.zeros(1, NUM_POINTS * 2, grid, grid)
+        a = LandmarkNet5Self.decode_landmarks(hm, off, mode="soft", pool=True)[0]
+        b = LandmarkNet5Self.decode_landmarks(hm, off, mode="soft", pool=False)[0]
+        np.testing.assert_allclose(a.numpy(), b.numpy())
+
+
+@_TORCH
+class SoftDecodeTests(unittest.TestCase):
+    def test_soft_argmax_peak_location(self) -> None:
+        grid = 8
+        hm = torch.full((1, NUM_POINTS, grid, grid), -12.0)
+        hm[0, 0, 2, 3] = 12.0  # confident single-cell peak
+        off = torch.zeros(1, NUM_POINTS * 2, grid, grid)
+        pts = LandmarkNet5Self.decode_landmarks(hm, off, mode="soft")[0]
+        # Expected coordinate of a one-hot at cell index i is i/grid — the
+        # same continuous convention as gaussian_targets (gx = x_norm * grid).
+        self.assertAlmostEqual(float(pts[0, 0]), 3 / grid, delta=1e-3)
+        self.assertAlmostEqual(float(pts[0, 1]), 2 / grid, delta=1e-3)
+
+    def test_soft_argmax_between_cells(self) -> None:
+        """Two equal peaks → expected coord at the midpoint (sub-pixel)."""
+        grid = 8
+        hm = torch.full((1, NUM_POINTS, grid, grid), -12.0)
+        hm[0, 0, 3, 3] = 12.0
+        hm[0, 0, 3, 4] = 12.0
+        off = torch.zeros(1, NUM_POINTS * 2, grid, grid)
+        pts = LandmarkNet5Self.decode_landmarks(hm, off, mode="soft")[0]
+        self.assertAlmostEqual(float(pts[0, 0]), 3.5 / grid, delta=1e-3)
+        self.assertAlmostEqual(float(pts[0, 1]), 3 / grid, delta=1e-3)
+
+    def test_soft_argmax_matches_gaussian_gt(self) -> None:
+        """Realistic calibrated logits: sigmoid(logits) ≈ Gaussian target,
+        background pushed negative (as the focal loss trains it)."""
+        grid = 16
+        gt = torch.tensor(GT_CROP).unsqueeze(0)
+        target = gaussian_targets(gt, grid, grid, sigma=1.0)
+        hm = torch.logit(target.clamp(1e-4, 1.0 - 1e-4))
+        off = torch.zeros(1, NUM_POINTS * 2, grid, grid)
+        pts = LandmarkNet5Self.decode_landmarks(hm, off, mode="soft")[0]
+        np.testing.assert_allclose(pts.numpy(), GT_CROP, atol=0.02)
+
+
+class _FixedRng(random.Random):
+    """Deterministic RNG: always flip, fixed brightness gain/offset."""
+
+    def random(self) -> float:  # noqa: D102 — always below the 0.5 flip gate
+        return 0.0
+
+    def uniform(self, a: float, b: float) -> float:  # noqa: D102
+        return a
+
+
+class AugmentTests(unittest.TestCase):
+    """Flip semantics of scripts.train_face_landmarks.augment_batch (no torch)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import sys
+
+        scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import train_face_landmarks as tfl  # noqa: E402
+
+        cls.tfl = tfl
+
+    def test_flip_swaps_eye_and_mouth_identities(self) -> None:
+        imgs = np.zeros((1, 3, 4, 4), np.float32)
+        pts = np.array([GT_CROP], np.float32)  # (1, 5, 2) crop-normalized
+        out_imgs, out_pts = self.tfl.augment_batch(imgs, pts, _FixedRng())
+        # x mirrored; identities swapped: L eye ↔ R eye, mouth L ↔ mouth R.
+        np.testing.assert_allclose(out_pts[0, 0], [1 - GT_CROP[1, 0], GT_CROP[1, 1]], atol=1e-6)
+        np.testing.assert_allclose(out_pts[0, 1], [1 - GT_CROP[0, 0], GT_CROP[0, 1]], atol=1e-6)
+        np.testing.assert_allclose(out_pts[0, 2], [1 - GT_CROP[2, 0], GT_CROP[2, 1]], atol=1e-6)
+        np.testing.assert_allclose(out_pts[0, 3], [1 - GT_CROP[4, 0], GT_CROP[4, 1]], atol=1e-6)
+        np.testing.assert_allclose(out_pts[0, 4], [1 - GT_CROP[3, 0], GT_CROP[3, 1]], atol=1e-6)
+        # Image rows preserved (flip is horizontal only).
+        self.assertEqual(out_imgs.shape, imgs.shape)
 
 
 @_TORCH

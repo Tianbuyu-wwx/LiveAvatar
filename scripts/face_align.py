@@ -49,6 +49,45 @@ def get_template_5(image_size: int) -> np.ndarray:
     )
 
 
+def mask_box_from_points5(
+    pts5_px: np.ndarray, frame_w: int, frame_h: int
+) -> tuple[int, int, int, int]:
+    """Derive the mask crop box from 5-point landmarks (pixel coords).
+
+    Replaces the det-box+25%-pad derivation (R1 M4 strategy): a landmark-
+    derived region depends only on the points, so any two backends whose
+    points agree produce near-identical mask boxes — the mask IoU gate no
+    longer hinges on detection-box agreement.
+
+    Order-agnostic by construction: eye midpoint / mouth midpoint / the
+    interpupillary distance are all symmetric, so detector-specific point
+    orderings (YuNet regresses right-eye-first) need no remapping.
+
+    Extents are calibrated to the previous ~1.5x padded face box on typical
+    front-face proportions: half-width 1.35d, half-height 1.30d where d is
+    the outer-corner eye distance.
+    """
+    pts = np.asarray(pts5_px, dtype=np.float64)
+    if pts.shape != (5, 2):
+        raise ValueError(f"expected (5, 2) pixel points, got {pts.shape}")
+    eye_mid = (pts[0] + pts[1]) / 2.0
+    mouth_mid = (pts[3] + pts[4]) / 2.0
+    cx = (eye_mid[0] + mouth_mid[0]) / 2.0
+    cy = (eye_mid[1] + mouth_mid[1]) / 2.0
+    d = float(np.linalg.norm(pts[1] - pts[0]))
+    if d <= 0:
+        return (0, 0, 0, 0)
+    half_w = 1.35 * d
+    half_h = 1.30 * d
+    x1 = max(0, int(round(cx - half_w)))
+    y1 = max(0, int(round(cy - half_h)))
+    x2 = min(frame_w, int(round(cx + half_w)))
+    y2 = min(frame_h, int(round(cy + half_h)))
+    if x2 <= x1 or y2 <= y1:
+        return (0, 0, 0, 0)
+    return (x1, y1, x2, y2)
+
+
 def align_frame(
     frame: np.ndarray, src_pts: np.ndarray, dst_pts: np.ndarray, output_size: int
 ) -> np.ndarray:
@@ -68,7 +107,7 @@ def align_frame(
 
 def _create_landmarker(model_path: Path):
     """Create a MediaPipe FaceLandmarker for VIDEO mode."""
-    mp = _ensure_mediapipe()
+    _ensure_mediapipe()  # raises a clear error when mediapipe is missing
     from mediapipe.tasks.python.core.base_options import BaseOptions
     from mediapipe.tasks.python.vision.core.vision_task_running_mode import (
         VisionTaskRunningMode as RunningMode,

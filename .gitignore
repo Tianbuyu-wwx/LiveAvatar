@@ -9,6 +9,7 @@ dist/
 # Anchored to repo root: bare "models/" etc. used to swallow source dirs
 # nested anywhere in the tree (e.g. src/liveavatar/musetalk/models/).
 /models/
+/weights/
 /avatars/
 /data/
 /logs/

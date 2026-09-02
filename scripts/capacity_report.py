@@ -28,10 +28,9 @@ import time
 
 import httpx2 as httpx
 import uvicorn
+from demo_local import _PatternWorker
 from websockets.asyncio.client import connect as ws_connect
 from wsperf import StreamStats, _percentile
-
-from demo_local import _PatternWorker
 
 from liveavatar.config import AvatarPoolConfig
 from liveavatar.pipeline import AvatarPipeline

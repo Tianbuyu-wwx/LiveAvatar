@@ -25,6 +25,7 @@ from liveavatar.face_backend import (
     landmarks5,
     reset_backend_caches,
     resolve_backend,
+    resolve_det_conf,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -36,7 +37,7 @@ try:
     import torch
 
     from liveavatar.face_landmarks import LandmarkNet5Self
-    from liveavatar.face_self import TinyFaceDetector
+    from liveavatar.face_self import ANCHOR_SIZES, TinyFaceDetector
 
     _HAVE_TORCH = True
 except ImportError:  # CI installs light extras only; torch is optional there
@@ -108,6 +109,16 @@ class ResolveBackendTests(unittest.TestCase):
                 resolve_backend(None, "FACE_BACKEND", "yunet", ("yunet", "self"))
 
 
+class ResolveDetConfTests(unittest.TestCase):
+    def test_per_backend_defaults(self) -> None:
+        self.assertEqual(resolve_det_conf("self", None), fb.DEFAULT_SELF_DET_CONF)
+        self.assertEqual(resolve_det_conf("yunet", None), fb.DEFAULT_DET_CONF)
+
+    def test_explicit_value_overrides(self) -> None:
+        self.assertEqual(resolve_det_conf("self", 0.7), 0.7)
+        self.assertEqual(resolve_det_conf("yunet", 0.2), 0.2)
+
+
 class DetectFacesTests(unittest.TestCase):
     def tearDown(self) -> None:
         reset_backend_caches()
@@ -130,7 +141,18 @@ class DetectFacesTests(unittest.TestCase):
                 detect_faces(_synthetic_image(), det_ckpt_path="nowhere/none.pt")
 
     def test_yunet_backend_with_fake_detector(self) -> None:
-        faces = np.array([[10.0, 20.0, 50.0, 60.0, 0.9]])
+        # Real YuNet rows: x, y, w, h, 10 landmark cols, score (15 total).
+        faces = np.array(
+            [[
+                10.0, 20.0, 50.0, 60.0,
+                20.0, 35.0,  # right eye
+                40.0, 35.0,  # left eye
+                30.0, 50.0,  # nose tip
+                22.0, 65.0,  # right mouth corner
+                38.0, 65.0,  # left mouth corner
+                0.9,
+            ]]
+        )
         fake = _FakeYuNet(faces)
         img = _synthetic_image()
         with tempfile_dir() as tmp:
@@ -149,6 +171,10 @@ class DetectFacesTests(unittest.TestCase):
             (boxes[0].x1, boxes[0].y1, boxes[0].x2, boxes[0].y2, boxes[0].score),
             (10.0, 20.0, 60.0, 80.0, 0.9),
         )
+        # The regressed 5 points land on the FaceBox in pixel coords.
+        assert boxes[0].points5 is not None
+        self.assertEqual(boxes[0].points5.shape, (5, 2))
+        self.assertEqual(boxes[0].points5[0].tolist(), [20.0, 35.0])
         # First call creates (constructor sets size); second call reuses the
         # cached detector → exactly one setInputSize and one create call.
         self.assertEqual(create.call_count, 1)
@@ -230,7 +256,12 @@ class SelfBackendTorchTests(unittest.TestCase):
         det_path = str(Path(tmp) / "det.pt")
         lm_path = str(Path(tmp) / "lm.pt")
         torch.save(
-            {"model": TinyFaceDetector(width=8).state_dict(), "width": 8, "input_size": 32},
+            {
+                "model": TinyFaceDetector(width=8).state_dict(),
+                "width": 8,
+                "input_size": 32,
+                "anchor_sizes": ANCHOR_SIZES,
+            },
             det_path,
         )
         torch.save(

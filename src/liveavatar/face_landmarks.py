@@ -42,6 +42,11 @@ class LandmarkNet5Self(nn.Module):
 
     def __init__(self, width: int = 32) -> None:
         super().__init__()
+        self.decode_mode = "argmax"  # checkpoint may override ("soft")
+        # 3×3 avg-pool on the heatmap before argmax (round-3 anti-jitter
+        # measure): flattens single-cell argmax jumps between near-equal
+        # neighbour peaks. Restored from the checkpoint / LANDMARK_POOL env.
+        self.pool_before_argmax = False
         self.stem = nn.Sequential(
             nn.Conv2d(3, 16, 3, stride=2, padding=1, bias=False),
             nn.GroupNorm(4, 16),
@@ -66,15 +71,40 @@ class LandmarkNet5Self(nn.Module):
 
     @staticmethod
     def decode_landmarks(
-        heatmaps: torch.Tensor, offsets: torch.Tensor
+        heatmaps: torch.Tensor,
+        offsets: torch.Tensor,
+        mode: str = "argmax",
+        pool: bool = False,
     ) -> torch.Tensor:
         """(N, 5, Hm, Wm), (N, 10, Hm, Wm) → (N, 5, 2) normalized coords.
 
-        Differentiable w.r.t. the offsets gathered at the (detached) argmax
-        cell, so the coordinate loss trains the offset head directly.
+        mode="argmax": per-channel argmax cell + offset residual (PIPNet
+        single-step decoding). Differentiable w.r.t. the offsets gathered at
+        the (detached) argmax cell, so the coordinate loss trains the offset
+        head directly. ``pool=True`` first smooths the heatmaps with a 3×3
+        average pooling (stride 1), which stabilizes the argmax when two
+        neighbouring cells carry near-equal logits; the offset is still
+        gathered at the (possibly re-picked) argmax cell.
+
+        mode="soft": differentiable DSNT-style decoding — sigmoid heatmaps
+        normalized into a per-channel probability distribution, then the
+        expected (x, y) is taken over the whole grid. Sub-pixel by
+        construction — no argmax quantization, no keypoint jumping between
+        cells; the offset head is unused at decode time. ``pool`` is ignored.
         """
         n, c, h, w = heatmaps.shape
-        flat = heatmaps.reshape(n, c, h * w)
+        if mode == "soft":
+            p = torch.sigmoid(heatmaps)
+            p = p / p.sum(dim=(2, 3), keepdim=True).clamp(min=1e-12)
+            xs = torch.arange(w, dtype=torch.float32, device=heatmaps.device)
+            ys = torch.arange(h, dtype=torch.float32, device=heatmaps.device)
+            ex = (p * xs.view(1, 1, 1, w)).sum(dim=(2, 3))  # (n, c)
+            ey = (p * ys.view(1, 1, h, 1)).sum(dim=(2, 3))
+            return torch.stack([ex / w, ey / h], dim=-1)
+        hm = heatmaps
+        if pool:
+            hm = F.avg_pool2d(hm, kernel_size=3, stride=1, padding=1)
+        flat = hm.reshape(n, c, h * w)
         idx = flat.argmax(dim=-1)  # (n, c) — detached by argmax
         cell_y = (idx // w).float()
         cell_x = (idx % w).float()
@@ -107,8 +137,8 @@ def gaussian_targets(
 ) -> torch.Tensor:
     """(N, 5, 2) normalized points → (N, 5, grid_h, grid_w) Gaussians."""
     n, c, _ = points.shape
-    ys = torch.arange(grid_h, dtype=torch.float32).view(1, 1, grid_h, 1)
-    xs = torch.arange(grid_w, dtype=torch.float32).view(1, 1, 1, grid_w)
+    ys = torch.arange(grid_h, dtype=torch.float32, device=points.device).view(1, 1, grid_h, 1)
+    xs = torch.arange(grid_w, dtype=torch.float32, device=points.device).view(1, 1, 1, grid_w)
     gx = (points[..., 0] * grid_w).view(n, c, 1, 1)
     gy = (points[..., 1] * grid_h).view(n, c, 1, 1)
     sq = (xs - gx) ** 2 + (ys - gy) ** 2
@@ -121,6 +151,7 @@ def landmark_loss(
     gt_points: torch.Tensor,
     sigma: float = 1.5,
     coord_weight: float = 0.25,
+    decode_mode: str = "argmax",
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Focal heatmap loss (soft Gaussian labels) + offset L1 @ gt cell + coord L2.
 
@@ -130,7 +161,8 @@ def landmark_loss(
     detector). gt_points: (N, 5, 2) crop-normalized.
     """
     n, c, h, w = heatmaps.shape
-    target = gaussian_targets(gt_points.to(heatmaps.device), h, w, sigma)
+    gt_points = gt_points.to(heatmaps.device)
+    target = gaussian_targets(gt_points, h, w, sigma)
     bce = F.binary_cross_entropy_with_logits(heatmaps, target, reduction="none")
     p = torch.sigmoid(heatmaps)
     p_t = target * p + (1 - target) * (1 - p)
@@ -157,7 +189,7 @@ def landmark_loss(
     parts = {"hm": float(hm_loss.detach()), "off": float(off_loss.detach())}
     loss = hm_loss + off_loss
     if coord_weight > 0:
-        pts = LandmarkNet5Self.decode_landmarks(heatmaps, offsets)
+        pts = LandmarkNet5Self.decode_landmarks(heatmaps, offsets, mode=decode_mode)
         coord_loss = F.l1_loss(pts, gt_points.to(heatmaps.device))
         loss = loss + coord_weight * coord_loss
         parts["coord"] = float(coord_loss.detach())
@@ -170,15 +202,22 @@ def landmarks5(
     image_rgb: np.ndarray,
     face_box_xywh_norm: list[float],
     input_size: int = 128,
+    decode_mode: str | None = None,
 ) -> np.ndarray:
     """Detect 5 landmarks for one face box; returns (5, 2) normalized to
-    the *full image* (same convention as the manifest / MediaPipe teacher)."""
+    the *full image* (same convention as the manifest / MediaPipe teacher).
+
+    ``decode_mode`` defaults to the mode recorded on the model (set from
+    the checkpoint by ``face_backend.load_lm_model``).
+    """
     model.eval()
     transform = FaceCropTransform(face_box_xywh_norm, out_size=input_size)
     crop = transform.crop(image_rgb)
     tensor = torch.from_numpy(crop).permute(2, 0, 1).unsqueeze(0).float() / 255.0
     hm, off = model(tensor)
-    pts = LandmarkNet5Self.decode_landmarks(hm, off)[0].numpy()  # (5, 2) in crop
+    mode = decode_mode or str(getattr(model, "decode_mode", "argmax"))
+    pool = bool(getattr(model, "pool_before_argmax", False))
+    pts = LandmarkNet5Self.decode_landmarks(hm, off, mode=mode, pool=pool)[0].numpy()  # (5, 2) crop
     return transform.points_back(pts)
 
 

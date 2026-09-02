@@ -53,6 +53,7 @@ epoch 打断权威仍在 worker：`cancel` 控制消息触发 `advance_epoch`，
 - **自研视频传输（R2）**：26 字节帧头二进制协议（seq/epoch/pts/codec/flags），MJPEG 全帧与**区域独立帧**双编码（口型区域先验，带宽 ↓55–80%），帧独立可解码、任意丢帧不花屏。
 - **自适应质量**：客户端周期上报拥塞信号（丢帧率/码率），服务端 EWMA 聚合 + 5 档质量状态机，弱网"降画质不冻结"，恢复带迟滞不抖动。
 - **音频来源无关**：接任意 TTS、麦克风、wav 文件——本库只负责"音频进、视频出"。
+- **自研人脸检测 + 5 点关键点（R1）**：`TinyFaceDetector` + `LandmarkNet5Self` 与 YuNet / MediaPipe 双后端可切换（`FACE_BACKEND` / `LANDMARK_BACKEND`）；mask 坐标由 5 点关键点直接派生（不同检测器的框差异不再影响贴回区域），关键点解码前 3×3 平均池化抑制帧间抖动；检测置信度按后端自适应默认（self 0.35 / yunet 0.5，显式传参不受影响）。
 
 ## 环境要求
 
@@ -100,7 +101,7 @@ python scripts/prepare_avatar.py \
     --max-frames 8
 ```
 
-产出 `data/avatars/yongen/`（full_imgs / coords.pkl / latents.pt / mask/ / mask_coords.pkl）。默认带五点人脸对齐（`LANDMARK_BACKEND=mediapipe|self`，显著提升口型质量；自研 `self` 后端权重训练完成后将成为默认）。
+产出 `data/avatars/yongen/`（full_imgs / coords.pkl / latents.pt / mask/ / mask_coords.pkl）。默认带五点人脸对齐（`LANDMARK_BACKEND=mediapipe|self`，显著提升口型质量）；检测后端 `FACE_BACKEND=yunet|self` 同样可切换，`self` 为自研 TinyFaceDetector（置信度默认 0.35，YuNet 为 0.5，均可用参数显式覆盖）。
 
 **推荐使用自采素材**：yongen 仅为来自 MuseTalk 上游仓库的离线示例（仅限非商业研究用途，商用前必须替换）。自采一份自己的素材即可彻底摆脱上游数据依赖：
 
@@ -189,6 +190,8 @@ curl -X POST localhost:8000/v1/sessions -d '{"mode": "duplex"}'
 | `LIVEAVATAR_VOICE_DEVICE` / `LIVEAVATAR_VOICE_IS_HALF` | `cuda` / `true` | VoicePool 推理设备与精度（`cpu` / `false` 即纯 CPU） |
 | `LIVEAVATAR_AEC` | `0` | duplex：启用纯 numpy NLMS 回声消除 |
 | `LIVEAVATAR_DUPLEX_AVATAR` | `0` | duplex：启用视频辐条（MuseTalk 生成口型视频） |
+| `FACE_BACKEND` | `yunet` | 人脸检测后端：`yunet`（YuNet onnx，默认）或 `self`（自研 TinyFaceDetector；默认置信度 self 0.35 / yunet 0.5） |
+| `LANDMARK_BACKEND` | `mediapipe` | 5 点关键点后端：`mediapipe` 或 `self`（自研 LandmarkNet5Self） |
 
 ## HTTP / WebSocket API
 
@@ -242,7 +245,7 @@ await pipeline.close_session("s1")
 await pipeline.stop()
 ```
 
-测试时可注入 fake `pool` / `publisher_factory`，490+ 个单测全部不依赖 torch / GPU。
+测试时可注入 fake `pool` / `publisher_factory`，640+ 个单测全部不依赖 torch / GPU。
 
 ## 目录结构
 
@@ -288,10 +291,10 @@ src/liveavatar/
 └── musetalk/            # MuseTalk 模型定义（自包含）
 scripts/                 # download_models / download_gptsovits / prepare_avatar /
                          # demo_local / wsperf / e2e_bench / capacity_report /
-                         # make_face_dataset / face_align / train_face_det /
-                         # train_face_landmarks / accept_face_backend
+                         # download_face_datasets / make_face_dataset / make_manifest_det /
+                         # face_align / train_face_det / train_face_landmarks / accept_face_backend
 web/                     # 浏览器 demo（无构建，原生 JS：player.js 抖动缓冲 + canvas 合成）
-tests/                   # 51 文件、490+ 用例（协议/传输/自适应/星型架构/人脸/并发/令牌/端到端，CPU-only）
+tests/                   # 55 文件、640+ 用例（协议/传输/自适应/星型架构/人脸/并发/令牌/端到端，CPU-only）
 docs/                    # PROTOCOL（ws 协议）/ DEPLOYMENT（生产部署+定容）/ 容量报告 / 自检与验收报告
 third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练权重不入库）
 ```
@@ -317,6 +320,7 @@ third_party/GPT_SoVITS   # GPT-SoVITS 引擎代码（MIT，vendored；预训练�
 - [x] 自研 WS 视频传输 + 区域编码 + 自适应质量（R2，默认启用）
 - [x] LiveKit 退役（M-C）：仅自研传输 + 三路并发验证（`scripts/capacity_report.py`）
 - [x] HS256 会话令牌接入服务（M-D）：短 TTL 签发 + WS 三种携带方式 + 门禁单测
+- [x] 自研人脸检测/关键点（R1）：5 点关键点派生 mask + 3×3 池化 + 泛化增训（M1/M2），方案与验收见 [docs/自研人脸检测与对齐方案_2026-08-31.md](docs/自研人脸检测与对齐方案_2026-08-31.md)
 - [ ] Apple Silicon (MPS) 支持
 
 ## 许可证

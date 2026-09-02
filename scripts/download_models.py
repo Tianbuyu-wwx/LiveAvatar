@@ -15,7 +15,8 @@ Teacher assets (NOT runtime dependencies — R1 M5):
   mediapipe`` (the ``teacher`` extra).
 
 Usage:
-    python scripts/download_models.py [--root <project_root>] [--skip-models] [--skip-demo] [--teacher]
+    python scripts/download_models.py [--root <project_root>] [--skip-models] \
+        [--skip-demo] [--teacher]
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ import urllib.request
 from pathlib import Path
 
 
-def _download_hf_repo(repo_id: str, target_dir: Path, *, allow_patterns: list[str] | None = None) -> None:
+def _download_hf_repo(
+    repo_id: str, target_dir: Path, *, allow_patterns: list[str] | None = None
+) -> None:
     """Download a HuggingFace repo to a local directory via snapshot_download."""
     from huggingface_hub import snapshot_download
 

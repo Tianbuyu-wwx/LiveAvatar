@@ -24,8 +24,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-NUM_ANCHORS = 3
-ANCHOR_SIZES = (0.15, 0.30, 0.50)  # normalized to the image side
+NUM_ANCHORS = 5
+# Normalized to the image side. Five scales (was three 0.15/0.30/0.50):
+# WIDER faces median 2.8% of the side never matched a 0.15 anchor under
+# 0.5-IoU, so 96% of WIDER boxes got no positive supervision (see 方案 doc
+# §Anchor 尺度适配检查). New trainings emit 5-anchor checkpoints that record
+# "anchor_sizes"; legacy 3-anchor checkpoints load via the LEGACY default.
+ANCHOR_SIZES = (0.05, 0.10, 0.15, 0.30, 0.50)
+LEGACY_ANCHOR_SIZES = (0.15, 0.30, 0.50)
 STRIDE = 16
 
 
@@ -50,8 +56,10 @@ class DepthwiseSeparableConv(nn.Module):
 class TinyFaceDetector(nn.Module):
     """Stride-16 single-level anchor face detector (~0.2M params)."""
 
-    def __init__(self, width: int = 48) -> None:
+    def __init__(self, width: int = 48, anchor_sizes: tuple[float, ...] = ANCHOR_SIZES) -> None:
         super().__init__()
+        self.anchor_sizes = tuple(anchor_sizes)
+        num_anchors = len(self.anchor_sizes)
         self.stem = nn.Sequential(
             nn.Conv2d(3, 16, 3, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(16),
@@ -67,25 +75,28 @@ class TinyFaceDetector(nn.Module):
             nn.BatchNorm2d(width),
             nn.ReLU(inplace=True),
         )
-        self.cls_head = nn.Conv2d(width, NUM_ANCHORS, 1)
-        self.box_head = nn.Conv2d(width, NUM_ANCHORS * 4, 1)
+        self.cls_head = nn.Conv2d(width, num_anchors, 1)
+        self.box_head = nn.Conv2d(width, num_anchors * 4, 1)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Return per-anchor class logits (N, A, Hc*Wc) and box offsets (N, A*4, Hc*Wc)."""
         feat = self.head_conv(self.body(self.stem(x)))
         n, _, hc, wc = feat.shape
-        cls = self.cls_head(feat).reshape(n, NUM_ANCHORS, hc * wc)
-        box = self.box_head(feat).reshape(n, NUM_ANCHORS * 4, hc * wc)
+        a = len(self.anchor_sizes)
+        cls = self.cls_head(feat).reshape(n, a, hc * wc)
+        box = self.box_head(feat).reshape(n, a * 4, hc * wc)
         return cls, box
 
     @staticmethod
-    def make_anchors(grid_h: int, grid_w: int) -> torch.Tensor:
+    def make_anchors(
+        grid_h: int, grid_w: int, sizes: tuple[float, ...] = ANCHOR_SIZES
+    ) -> torch.Tensor:
         """(A*grid_h*grid_w, 4) normalized anchors as (cx, cy, w, h)."""
         ys = (torch.arange(grid_h, dtype=torch.float32) + 0.5) / grid_h
         xs = (torch.arange(grid_w, dtype=torch.float32) + 0.5) / grid_w
         cy, cx = torch.meshgrid(ys, xs, indexing="ij")
         anchors = []
-        for size in ANCHOR_SIZES:
+        for size in sizes:
             anchors.append(
                 torch.stack(
                     [cx.reshape(-1), cy.reshape(-1),
@@ -98,24 +109,24 @@ class TinyFaceDetector(nn.Module):
 
     @staticmethod
     def decode_offsets(
-        offsets: torch.Tensor, anchors: torch.Tensor
+        offsets: torch.Tensor, anchors: torch.Tensor, num_anchors: int = NUM_ANCHORS
     ) -> torch.Tensor:
         """(…, A*4, K) or (K, A*4) offsets → (…, K, 4) boxes (cx, cy, w, h)."""
         if offsets.dim() == 2:
             offsets = offsets.unsqueeze(0)
         n, a4, k = offsets.shape
-        assert a4 == NUM_ANCHORS * 4
-        d = offsets.reshape(n, NUM_ANCHORS, 4, k)
-        ax = anchors[:, 0].view(1, NUM_ANCHORS, 1, k)
-        ay = anchors[:, 1].view(1, NUM_ANCHORS, 1, k)
-        aw = anchors[:, 2].view(1, NUM_ANCHORS, 1, k)
-        ah = anchors[:, 3].view(1, NUM_ANCHORS, 1, k)
+        assert a4 == num_anchors * 4
+        d = offsets.reshape(n, num_anchors, 4, k)
+        ax = anchors[:, 0].view(1, num_anchors, 1, k)
+        ay = anchors[:, 1].view(1, num_anchors, 1, k)
+        aw = anchors[:, 2].view(1, num_anchors, 1, k)
+        ah = anchors[:, 3].view(1, num_anchors, 1, k)
         # Keep every term at (n, A, 1, k) so broadcasting stays aligned.
         cx = ax + d[:, :, 0].unsqueeze(2) * aw
         cy = ay + d[:, :, 1].unsqueeze(2) * ah
         w = aw * torch.exp(d[:, :, 2].unsqueeze(2).clamp(max=4.0))
         h = ah * torch.exp(d[:, :, 3].unsqueeze(2).clamp(max=4.0))
-        return torch.stack([cx, cy, w, h], dim=-1).reshape(n, NUM_ANCHORS * k, 4)
+        return torch.stack([cx, cy, w, h], dim=-1).reshape(n, num_anchors * k, 4)
 
 
 def nms(boxes: np.ndarray, scores: np.ndarray, iou_thr: float = 0.4) -> list[int]:
@@ -157,10 +168,13 @@ def detect(
     iou_threshold: float = 0.4,
     input_size: int = 256,
 ) -> list[tuple[list[float], float]]:
-    """Run inference on one RGB uint8 image; return [(xyxy_norm, score), ...].
+    """Run inference on one RGB uint8 image; return [(xyxy_pixel, score), ...].
 
-    ``input_size`` must match the resolution the model was trained on
-    (multiple of STRIDE) so the anchor grid stays aligned.
+    Boxes are in ORIGINAL-image pixel coordinates (x1, y1, x2, y2), despite
+    the historical docstring claiming normalization — callers have always
+    consumed pixel coords. ``input_size`` must match the resolution the
+    model was trained on (multiple of STRIDE) so the anchor grid stays
+    aligned.
     """
     model.eval()
     h, w = image.shape[:2]
@@ -170,8 +184,11 @@ def detect(
     )
     cls, box = model(tensor)
     gh = gw = input_size // STRIDE
-    anchors = TinyFaceDetector.make_anchors(gh, gw)
-    boxes = TinyFaceDetector.decode_offsets(box[0], anchors)[0].numpy()  # (A*K, 4) cxcywh
+    sizes = getattr(model, "anchor_sizes", ANCHOR_SIZES)
+    anchors = TinyFaceDetector.make_anchors(gh, gw, sizes)
+    boxes = TinyFaceDetector.decode_offsets(
+        box[0], anchors, len(sizes)
+    )[0].numpy()  # (A*K, 4) cxcywh
     probs = torch.sigmoid(cls[0]).reshape(-1).numpy()  # (A*K,)
     mask = probs >= conf_threshold
     if not mask.any():
@@ -237,6 +254,12 @@ def detection_loss(
         area_g = (gx2 - gx1) * (gy2 - gy1)
         iou = inter / (area_a[:, None] + area_g[None, :] - inter + 1e-9)
         pos = iou.max(dim=1).values >= 0.5  # (A*K,)
+        # SSD-style guarantee: every GT keeps its best-matching anchor as a
+        # positive even below the 0.5 threshold — small / odd-aspect faces
+        # (WIDER median 0.028, w300 tight boxes) otherwise receive NO
+        # supervision at all.
+        if iou.shape[1] > 0:
+            pos[iou.argmax(dim=0)] = True
         if not pos.any():
             continue  # ignore unmatched anchors (neither pos nor hard neg)
         best_gt = iou.argmax(dim=1)  # (A*K,)

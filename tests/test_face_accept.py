@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 
 from liveavatar import face_accept as fa
-from liveavatar.face_backend import FaceBox
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCRIPTS = _REPO_ROOT / "scripts"
@@ -207,7 +206,7 @@ class AcceptHarnessWiringTests(unittest.TestCase):
     # speed_ratio gate stable despite micro-benchmark noise).
     _BURN = np.arange(2_000_000, dtype=np.float64)
 
-    def _run(self, jitter_px: float, with_detect: bool = True) -> dict:
+    def _run(self, jitter_px: float) -> dict:
         import accept_face_backend as harness
 
         frames = [_noise_frame()]
@@ -221,18 +220,12 @@ class AcceptHarnessWiringTests(unittest.TestCase):
         def self_landmarks(frame):
             return jittered
 
-        kwargs = {}
-        if with_detect:
-            kwargs["legacy_detect"] = lambda f: [FaceBox(20.0, 20.0, 100.0, 100.0, 0.9)]
-            kwargs["self_detect"] = lambda f: [FaceBox(20.0, 20.0, 100.0, 100.0, 0.9)]
-        report = harness.run_acceptance(
+        return harness.run_acceptance(
             frames,
             legacy_landmarks=legacy_landmarks,
             self_landmarks=self_landmarks,
             align_size=128,
-            **kwargs,
         )
-        return report
 
     def test_identical_backends_pass(self) -> None:
         report = self._run(jitter_px=0.0)
@@ -273,11 +266,15 @@ class AcceptHarnessWiringTests(unittest.TestCase):
         self.assertIsNone(report["ssim"])
         self.assertFalse(report["pass"])
 
-    def test_detect_skipped_leaves_mask_gate_skipped(self) -> None:
-        report = self._run(jitter_px=0.0, with_detect=False)
-        self.assertNotIn("mask_coords_iou", report)
-        self.assertEqual(report["gates"]["mask_coords_iou>=0.95"], "skipped")
-        self.assertFalse(report["pass"])  # core gate not evaluated
+    def test_mask_iou_is_landmark_derived(self) -> None:
+        """mask IoU now derives from the landmark points, not det boxes."""
+        # Identical points → identical mask boxes → IoU 1.0.
+        report = self._run(jitter_px=0.0)
+        self.assertEqual(report["mask_coords_iou"], 1.0)
+        # A 2 px point shift slightly moves the landmark-derived box.
+        report = self._run(jitter_px=2.0)
+        self.assertGreater(report["mask_coords_iou"], 0.95)
+        self.assertLess(report["mask_coords_iou"], 1.0)
 
     def test_load_frames_from_directory(self) -> None:
         import tempfile

@@ -47,6 +47,19 @@ class Map68To5Tests(unittest.TestCase):
         np.testing.assert_allclose(pts5[3], [7.0, 25.0])
         np.testing.assert_allclose(pts5[4], [13.0, 25.0])
 
+    def test_uses_outer_eye_corners_not_centroids(self) -> None:
+        """M4 semantics pin: pt0/pt1 must be the 300W outer corners (36/45),
+        matching scripts/face_align.get_landmarks_5 (mesh 33/263)."""
+        pts = _synthetic_pts68(cx=32.0, cy=32.0, s=10.0)
+        pts[36] = [1.0, 2.0]   # left-eye outer corner (distinct from contour)
+        pts[37:42] = [[5.0, 5.0]] * 5
+        pts[45] = [60.0, 4.0]  # right-eye outer corner
+        pts[42:45] = [[50.0, 6.0]] * 3
+        pts[46:48] = [[52.0, 7.0]] * 2
+        pts5 = mfd.map68to5(pts)
+        np.testing.assert_allclose(pts5[0], [1.0, 2.0])
+        np.testing.assert_allclose(pts5[1], [60.0, 4.0])
+
     def test_rejects_wrong_shape(self) -> None:
         with self.assertRaises(ValueError):
             mfd.map68to5(np.zeros((67, 2), np.float32))
@@ -90,6 +103,33 @@ class WiderParserTests(unittest.TestCase):
         rel, boxes = entries[0]
         self.assertEqual("0--Parade/0_Parade_marchingband_1_849.jpg", rel)
         self.assertEqual([[449, 330, 122, 331]], boxes)
+
+    def test_multiline_hf_mirror_variant(self) -> None:
+        """The hf-mirror wider_face_split.zip uses rel/count/per-face lines."""
+        p = Path(__file__).parent / "_tmp_bbx_ml.txt"
+        p.write_text(
+            "\n".join(
+                [
+                    "0--Parade/0_Parade_marchingband_1_799.jpg",
+                    "3",
+                    "78 221 7 8 2 0 0 0 0 0 ",
+                    "-5 238 14 17 2 0 0 0 0 0 ",  # invalid face → dropped
+                    "113 212 11 15 2 0 0 0 0 0 ",
+                    "0--Parade/0_Parade_Parade_0_904.jpg",
+                    "0",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        try:
+            entries = mfd.parse_wider_annotations(p)
+        finally:
+            p.unlink()
+        self.assertEqual(1, len(entries))
+        rel, boxes = entries[0]
+        self.assertEqual("0--Parade/0_Parade_marchingband_1_799.jpg", rel)
+        self.assertEqual([[78, 221, 7, 8], [113, 212, 11, 15]], boxes)
 
 
 class ManifestBuildTests(unittest.TestCase):

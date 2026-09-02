@@ -1,0 +1,19 @@
+{
+  "frames": 8,
+  "aligned_frames": 8,
+  "align_size": 768,
+  "eye_mouth_dev_px": 2.1576672040787894,
+  "ssim": 0.6922694966197014,
+  "mask_coords_iou": 0.9568207292129773,
+  "legacy_ms_per_frame": 102.806625,
+  "self_ms_per_frame": 27.091163,
+  "speed_ratio": 0.264,
+  "gates": {
+    "eye_mouth_dev_px<=2px": "fail",
+    "ssim>=0.97": "fail",
+    "mask_coords_iou>=0.95": "pass",
+    "speed_ratio<=1.5": "pass",
+    "latents_cosine>=0.99": "skipped"
+  },
+  "pass": false
+}

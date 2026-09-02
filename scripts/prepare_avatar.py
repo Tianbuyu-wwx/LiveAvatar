@@ -36,6 +36,16 @@ from pathlib import Path
 import numpy as np
 
 
+def _mask_box_from_points5(pts5, fw: int, fh: int):
+    """Lazy wrapper: scripts/face_align may not be on sys.path at import."""
+    scripts_dir = Path(__file__).resolve().parent
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from face_align import mask_box_from_points5
+
+    return mask_box_from_points5(pts5, fw, fh)
+
+
 def _imread_utf8(path: Path) -> np.ndarray | None:
     """cv2.imread with unicode path support on Windows."""
     import cv2
@@ -95,6 +105,8 @@ def _detect_faces(
     backend: str | None = None,
     yunet_model_path: str = "models/face_detection_yunet_2023mar.onnx",
     det_ckpt_path: str = "weights/self/facedet_256.pt",
+    landmark_backend: str | None = None,
+    lm_ckpt_path: str | None = None,
     bbox_shift: int = 5,
     conf_threshold: float = 0.7,
 ) -> tuple[list, list]:
@@ -103,8 +115,13 @@ def _detect_faces(
     ``backend``: "yunet" (OpenCV ONNX, legacy default) or "self" (R1
     self-developed detector); resolved via the ``FACE_BACKEND`` env var by
     the face_backend factory when None.
+
+    mask_coords are derived from the 5-point landmarks (R1 strategy):
+    YuNet carries its own regressed 5 points on each FaceBox, the self
+    backend runs the M2 landmark net on the largest face. Falls back to
+    the legacy padded-box derivation when no landmarks are available.
     """
-    from liveavatar.face_backend import detect_faces
+    from liveavatar.face_backend import detect_faces, landmarks5
 
     boxes_per_frame: list[list] = [
         detect_faces(
@@ -121,7 +138,7 @@ def _detect_faces(
     mask_coords_list: list[tuple[int, int, int, int]] = []
     placeholder = (0, 0, 0, 0)
 
-    for frame, boxes in zip(frames, boxes_per_frame):
+    for frame, boxes in zip(frames, boxes_per_frame, strict=True):
         fh, fw = frame.shape[:2]
         if not boxes:
             coords_list.append(placeholder)
@@ -140,7 +157,22 @@ def _detect_faces(
         y2 = min(fh, int(y2 + bh * bbox_shift / 20.0))
         coords_list.append((x1, y1, x2, y2))
 
-        # mask_coords: padded crop box (~1.25x face bbox) for blending.
+        # mask_coords from 5-point landmarks (backend-consistent); fall back
+        # to the padded box when landmarks are unavailable.
+        pts5 = best.points5
+        if pts5 is None:
+            pts_norm = landmarks5(
+                frame,
+                landmark_backend,
+                yunet_model_path=yunet_model_path,
+                det_ckpt_path=det_ckpt_path,
+                lm_ckpt_path=lm_ckpt_path or "weights/self/landmarks5_192_v2.pt",
+                det_conf_threshold=conf_threshold,
+            )
+            pts5 = None if pts_norm is None else pts_norm * np.array([fw, fh], np.float32)
+        if pts5 is not None:
+            mask_coords_list.append(_mask_box_from_points5(pts5, fw, fh))
+            continue
         pad = int(bw * 0.25)
         mx1 = max(0, x1 - pad)
         my1 = max(0, y1 - pad)
@@ -166,8 +198,8 @@ def _generate_masks(
     import cv2
 
     mask_dir.mkdir(parents=True, exist_ok=True)
-    for i, (frame, coord, mcoord) in enumerate(
-        zip(frames, coords_list, mask_coords_list)
+    for i, (_frame, coord, mcoord) in enumerate(
+        zip(frames, coords_list, mask_coords_list, strict=True)
     ):
         x1, y1, x2, y2 = coord
         mx1, my1, mx2, my2 = mcoord
@@ -199,6 +231,7 @@ def _encode_latents(
     Each latent is [1, 8, 32, 32] (masked + ref concatenated), matching
     ``vae.get_latents_for_unet``.
     """
+    import cv2
     import torch
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -212,7 +245,7 @@ def _encode_latents(
 
     latents: list = []
     placeholder = torch.zeros(1, 8, 32, 32, dtype=vae.vae.dtype)
-    for i, (frame, coord) in enumerate(zip(frames, coords_list)):
+    for i, (frame, coord) in enumerate(zip(frames, coords_list, strict=True)):
         x1, y1, x2, y2 = coord
         if x2 <= x1 or y2 <= y1:
             latents.append(placeholder.cpu())
@@ -355,6 +388,8 @@ def prepare_avatar(
         backend=face_backend,
         yunet_model_path=face_model_path,
         det_ckpt_path=det_ckpt or "weights/self/facedet_256.pt",
+        landmark_backend=landmark_backend,
+        lm_ckpt_path=lm_ckpt,
         bbox_shift=bbox_shift,
     )
     if all(c == (0, 0, 0, 0) for c in coords_list):
@@ -434,7 +469,7 @@ def main() -> int:
     ap.add_argument(
         "--lm-ckpt",
         default=None,
-        help="self landmark checkpoint (default: weights/self/landmarks5_128.pt)",
+        help="self landmark checkpoint (default: weights/self/landmarks5_192_v2.pt)",
     )
     args = ap.parse_args()
 

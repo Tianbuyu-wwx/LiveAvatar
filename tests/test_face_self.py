@@ -128,10 +128,23 @@ class OverfitTests(unittest.TestCase):
         self.assertGreater(score, 0.5)
 
     def test_anchor_sizes_cover_domain(self) -> None:
-        # Smallest anchor ≥ the smallest face we care about (~60px @256 ≈ 0.23)?
-        # 0.15 is a bit below on purpose — the loss/decode must still be sane.
-        self.assertEqual(3, len(ANCHOR_SIZES))
+        # Five scales from tiny (WIDER median 0.028) to large (w300 up to
+        # 0.74) — under 0.5-IoU matching every box class needs a nearby
+        # anchor, and detection_loss additionally force-matches each GT's
+        # best anchor (SSD-style guarantee).
+        self.assertEqual(5, len(ANCHOR_SIZES))
+        self.assertEqual(5, NUM_ANCHORS)
         self.assertTrue(all(0 < s < 1 for s in ANCHOR_SIZES))
+
+    def test_forced_best_match_supervises_tiny_face(self) -> None:
+        """A GT far below any anchor still yields a positive via forced match."""
+        anchors = TinyFaceDetector.make_anchors(16, 16)  # 256 input
+        # Tiny face: 3% of the side — below every anchor's 0.5-IoU reach.
+        gt = torch.tensor([[0.5, 0.5, 0.03, 0.03]])
+        cls = torch.zeros(1, NUM_ANCHORS, 16 * 16)
+        box = torch.zeros(1, NUM_ANCHORS * 4, 16 * 16)
+        _, pos_mask = detection_loss(cls, box, anchors, [gt])
+        self.assertTrue(pos_mask.any())
 
 
 if __name__ == "__main__":
