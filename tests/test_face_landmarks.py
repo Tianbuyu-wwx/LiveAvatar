@@ -182,6 +182,7 @@ class _FixedRng(random.Random):
         return a
 
 
+@_TORCH  # augment_batch itself is numpy-only, but train_face_landmarks imports torch
 class AugmentTests(unittest.TestCase):
     """Flip semantics of scripts.train_face_landmarks.augment_batch (no torch)."""
 
