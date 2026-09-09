@@ -26,6 +26,7 @@ import time
 import cv2
 import numpy as np
 
+from liveavatar.runtime.transition import CLOSED_OPENNESS, alpha_schedule, crossfade_bgr
 from liveavatar.worker import AvatarAssets, AvatarWorker
 
 _WIDTH = 256
@@ -155,6 +156,7 @@ class MouthProxyWorker(AvatarWorker):
         self._openness = 0.05
         self._target = 0.05
         self._frame_idx = 0
+        self._last_img: np.ndarray | None = None
 
     @property
     def last_openness(self) -> float:
@@ -167,6 +169,7 @@ class MouthProxyWorker(AvatarWorker):
         self._openness = 0.05
         self._target = 0.05
         self._frame_idx = 0
+        self._last_img = None
 
     def _infer_batch(self, pcm_s16le: bytes) -> list[tuple[bytes, bool]]:
         self._target = rms_to_openness(pcm_s16le)
@@ -175,6 +178,56 @@ class MouthProxyWorker(AvatarWorker):
             self._openness += _FRAME_ALPHA * (self._target - self._openness)
             t_s = (time.perf_counter() - self._t0) + self._frame_idx / _TARGET_FPS
             img = render_face(self._openness, t_s)
+            self._last_img = img
             self._frame_idx += 1
             frames.append((img.tobytes(), True))
         return frames
+
+    def render_transition_frames(
+        self, num_frames: int = 3, mode: str = "openness"
+    ) -> list[tuple[bytes, bool]]:
+        """P-D eval backend: ease the mouth shut over ``num_frames``.
+
+        Two renderings of the same α schedule
+        (:func:`liveavatar.runtime.transition.alpha_schedule`):
+
+        - ``mode="openness"`` (default) — the faithful CPU analog of the
+          paper's latent interpolation: the MuseTalk UNet decodes
+          ``z_i = (1-α_i)·z_now + α_i·z_closed`` into mouth GEOMETRY
+          morphing shut, so the proxy re-renders the face at the
+          interpolated openness ``op_i = (1-α_i)·op_now + α_i·closed``
+          (head-bob phase keeps advancing). A dark-pixel openness
+          extractor reads this back near-linearly, matching how the
+          real latent path would behave.
+        - ``mode="crossfade"`` — the paper's ghosting fallback: a pixel
+          space dissolve of the last frame toward the closed face. The
+          dark-cavity extractor reads the dissolve super-linearly (the
+          first step swallows most of the range), so this mode is for
+          A/B inspection, not for the primary eval.
+
+        The internal state lands on the neutral openness so the new
+        utterance's first batch continues from the closed mouth.
+        ``False`` is_speaking: these frames are a visual bridge, not
+        audio-driven.
+        """
+        if self._last_img is None:
+            return []  # nothing rendered yet — hard cut
+        alpha = alpha_schedule(num_frames)
+        if alpha.size == 0:
+            return []
+        t0 = (time.perf_counter() - self._t0) + self._frame_idx / _TARGET_FPS
+        if mode == "crossfade":
+            closed = render_face(CLOSED_OPENNESS, t0)
+            imgs = crossfade_bgr(self._last_img, closed, alpha)
+        elif mode == "openness":
+            op_now = self._openness
+            imgs = [
+                render_face((1.0 - a) * op_now + a * CLOSED_OPENNESS, t0 + i / _TARGET_FPS)
+                for i, a in enumerate(alpha)
+            ]
+        else:
+            raise ValueError(f"unknown transition mode: {mode!r}")
+        self._openness = CLOSED_OPENNESS
+        self._target = CLOSED_OPENNESS
+        self._frame_idx += len(imgs)
+        return [(img.tobytes(), False) for img in imgs]

@@ -29,6 +29,7 @@ import os
 import pickle
 from typing import Any
 
+from .runtime.transition import alpha_schedule
 from .worker import AvatarAssets, AvatarWorker
 
 logger = logging.getLogger("liveavatar.musetalk_worker")
@@ -186,6 +187,7 @@ class MuseTalkAvatarWorker(AvatarWorker):
         vae_model_dir: str = "models/sd-vae-ft-mse",
         shared_models: dict[str, Any] | None = None,
         silence_rms_threshold: float = 0.01,
+        neutral_frame_idx: int = 0,
     ) -> None:
         super().__init__(
             assets,
@@ -224,6 +226,14 @@ class MuseTalkAvatarWorker(AvatarWorker):
 
         # Frame index cycles through reference frames via mirror_index.
         self._frame_index = 0
+        # P-D: reference frame treated as the closed-mouth neutral target of
+        # the barge-in transition (latent z_closed). Selection refinement
+        # (perceptual "most closed" frame) is GPU-phase work — see
+        # docs/自研人脸检测与对齐方案 §M5 worklist.
+        self._neutral_idx = int(neutral_frame_idx)
+        # P-D: latent of the last predicted (spoken) frame — z_now of the
+        # transition interpolation. Captured in ``_infer_batch``.
+        self._last_pred_latent: Any = None
 
         logger.info(
             "musetalk_worker_init",
@@ -375,6 +385,10 @@ class MuseTalkAvatarWorker(AvatarWorker):
                 encoder_hidden_states=audio_feature_batch,
             ).sample
 
+            # P-D: keep the batch's last predicted latent — z_now for the
+            # barge-in transition interpolation (render_transition_frames).
+            self._last_pred_latent = pred_latents[-1:].detach()
+
             # 5. VAE decode → BGR face crops.
             pred = self._vae.decode_latents(pred_latents)
 
@@ -390,6 +404,51 @@ class MuseTalkAvatarWorker(AvatarWorker):
         return frames
 
     # ---------------------------------------------------- helpers
+
+    def render_transition_frames(
+        self, num_frames: int = 3
+    ) -> list[tuple[bytes, bool]]:
+        """P-D paper method: latent-space mouth-close interpolation.
+
+        Interpolates the VAE latent between the last predicted (spoken)
+        frame ``z_now`` and the avatar's closed-mouth neutral reference
+        latent ``z_closed`` under the shared alpha schedule, then decodes
+        the ``z_i = (1-α_i)·z_now + α_i·z_closed`` batch in ONE VAE pass
+        and pastes each crop back onto the neutral reference frame.
+
+        ``z_closed`` is the reference latent at ``neutral_frame_idx`` — in
+        MuseTalk's latent-to-latent UNet the input reference latent IS the
+        neutral face in prediction space (output ≈ input modulo the
+        audio-driven mouth), so it is a same-space closed-mouth target
+        without an extra forward pass. Requires a prior speech inference
+        (``z_now``); before that, or without torch, returns ``[]`` (hard
+        cut). Frames are marked ``is_speaking=False`` — not audio-driven.
+        """
+        import torch
+
+        z_now = self._last_pred_latent
+        if z_now is None:
+            return []
+        alpha = alpha_schedule(num_frames)
+        if alpha.size == 0:
+            return []
+
+        z_closed = self._input_latent_list[self._neutral_idx]
+        if z_closed.dim() == 3:  # [C,H,W] → batch-of-one, matching z_now
+            z_closed = z_closed.unsqueeze(0)
+        z_closed = z_closed.to(device=z_now.device, dtype=z_now.dtype)
+
+        alphas = torch.as_tensor(alpha, dtype=z_now.dtype, device=z_now.device)
+        shape = (-1,) + (1,) * (z_now.dim() - 1)
+        alphas = alphas.view(*shape)
+        zs = (1.0 - alphas) * z_now + alphas * z_closed
+
+        pred = self._vae.decode_latents(zs)
+        frames: list[tuple[bytes, bool]] = []
+        for res_frame in pred:
+            combine = self._paste_back(res_frame, self._neutral_idx)
+            frames.append((self._resize_to_target(combine).tobytes(), False))
+        return frames
 
     def _paste_back(self, pred_frame, idx: int):
         """Composite a predicted face crop onto the original full image.

@@ -49,6 +49,7 @@ sys.path.insert(
 )
 
 from audio_synth import synth_utterance  # noqa: E402
+
 from liveavatar.runtime.valley import find_valley_cut  # noqa: E402
 
 _SR = 16000
@@ -259,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         f"| {valley_rates['pause'] + valley_rates['soft']:.1%} "
         f"| {valley_rates['vowel']:.1%} |",
         "",
-        f"详细数据：`valley_ablation.json`",
+        "详细数据：`valley_ablation.json`",
     ]
     if "sweep" in report:
         lines += [

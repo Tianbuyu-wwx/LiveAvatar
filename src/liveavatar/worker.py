@@ -223,6 +223,27 @@ class AvatarWorker(abc.ABC):
         """
         ...
 
+    def render_transition_frames(
+        self, num_frames: int = 3
+    ) -> list[tuple[bytes, bool]]:
+        """P-D (paper §4.4): synthesize the barge-in transition frames.
+
+        Returns ``num_frames`` ``(frame_data_bgr24, is_speaking)`` tuples
+        easing the avatar from its current visual state to the closed-mouth
+        neutral state under the shared alpha schedule
+        (:func:`liveavatar.runtime.transition.alpha_schedule`). The adapter
+        publishes them as the FIRST frames of the new epoch — the first one
+        carries the epoch-boundary keyframe flag — so the freeze gap shows
+        a natural mouth-close instead of an open-mouth hold.
+
+        The base implementation returns ``[]`` (hard cut preserved);
+        subclasses with visual state override this (MuseTalk: latent
+        interpolation; mouth proxy: pixel crossfade). A raising override is
+        treated as "no transition" by the adapter, never as a session
+        failure.
+        """
+        return []
+
     def cancel(self) -> None:
         """Mark the worker as cancelled (for external use)."""
         self._busy = False

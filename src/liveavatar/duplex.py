@@ -89,6 +89,9 @@ class DuplexSettings:
     llm_model: str = ""
     llm_system_prompt: str = ""
     with_avatar: bool = False
+    # P-D: barge-in transition frames (0 = hard cut, the P-B baseline).
+    # Clamped to 0-4 by the adapter; 2-4 = 80-160 ms at 25 fps.
+    avatar_transition_frames: int = 3
 
     @classmethod
     def from_env(cls) -> DuplexSettings:
@@ -102,6 +105,9 @@ class DuplexSettings:
             llm_system_prompt=os.getenv("LIVEAVATAR_LLM_SYSTEM_PROMPT", ""),
             with_avatar=os.getenv("LIVEAVATAR_DUPLEX_AVATAR", "").lower()
             in ("1", "true", "yes"),
+            avatar_transition_frames=int(
+                os.getenv("LIVEAVATAR_AVATAR_TRANSITION_FRAMES", "3")
+            ),
         )
 
     def describe(self) -> dict[str, str]:
@@ -185,6 +191,7 @@ class DuplexSession:
             sink,
             fallback_worker=static_fallback_worker(avatar_id),
             metrics=self.metrics,
+            transition_frames=self.settings.avatar_transition_frames,
         )
 
         self.worker = worker or RealtimeWorker(

@@ -183,11 +183,14 @@ def resolve_avatar_adapter(
     fallback_worker: Any = None,
     degrade_after_errors: int | None = None,
     metrics: Any = None,
+    transition_frames: int | None = None,
 ) -> Any:
     """AvatarStreamingAdapter feeding ``publisher`` from ``pool``.
 
     None when the pool/publisher is missing or the avatar extra is not
-    installed (caller degrades to audio-only).
+    installed (caller degrades to audio-only). ``transition_frames`` (P-D)
+    forwards the barge-in transition length; None keeps the adapter
+    default (3 frames).
     """
     if pool is None or publisher is None or not HAS_AVATAR:
         return None
@@ -196,6 +199,8 @@ def resolve_avatar_adapter(
         kwargs["fallback_worker"] = fallback_worker
     if degrade_after_errors is not None:
         kwargs["degrade_after_errors"] = degrade_after_errors
+    if transition_frames is not None:
+        kwargs["transition_frames"] = transition_frames
     return AvatarStreamingAdapter(
         pool=pool,
         publisher=publisher,

@@ -247,13 +247,17 @@ class _MouthProxyPool:
         return {"mouth_proxy_pool": True}
 
 
-def _start_server(avatars: list[str]) -> tuple[uvicorn.Server, threading.Thread, int]:
+def _start_server(
+    avatars: list[str], *, transition_frames: int = 3
+) -> tuple[uvicorn.Server, threading.Thread, int]:
     state.settings = PublishSettings()
     state.settings.codec = "mjpeg"
     # Lossless capture: the eval recorder must see every rendered frame
     # (a dropped frame would bias the offline trajectory metrics).
     state.settings.client_queue_size = 512
     state.settings.duplex.with_avatar = True
+    # P-D: barge-in transition length (0 = hard-cut baseline replay).
+    state.settings.duplex.avatar_transition_frames = max(0, transition_frames)
     state.pool_config = AvatarPoolConfig(avatar_data_root="nonexistent")
     state.pipeline = AvatarPipeline(
         state.pool_config,
@@ -367,6 +371,25 @@ def _first_epoch2_frame_ts(obs: dict) -> float | None:
     return None
 
 
+def _first_driven_epoch2_frame_ts(obs: dict, skip: int) -> float | None:
+    """First epoch-2 frame NOT part of the P-D transition.
+
+    With a transition configured, the first ``skip`` epoch-2 frames are
+    the mouth-close bridge (published at cancel time, before utterance
+    2) — the session anchor for pacing and the phoneme clock is the
+    first DRIVEN frame after them. ``skip=0`` (hard cut) degenerates to
+    :func:`_first_epoch2_frame_ts`.
+    """
+    seen = 0
+    for f in obs["frames"]:
+        if f["epoch"] > 1:
+            if seen < skip:
+                seen += 1
+                continue
+            return f["ts"]
+    return None
+
+
 async def _run_session(
     http: httpx.AsyncClient,
     base: str,
@@ -378,6 +401,7 @@ async def _run_session(
     out_dir: str,
     utt_s: float = _UTT_S,
     utt2_s: float = _UTT2_S,
+    transition_frames: int = 0,
 ) -> dict:
     """Record one eval session (interrupted or reference) to ``out_dir``."""
     utterance = synth_utterance(utt_s, seed)
@@ -451,14 +475,16 @@ async def _run_session(
                 await audio.send(_SILENCE_CHUNK)
                 await _pace(t2 + _TRIGGER2_TONE_S + (i + 1) * _UPLINK_S)
             # Wait for the epoch-2 response to play out (anchor = first
-            # epoch-2 video frame, generated from its first TTS chunk).
+            # DRIVEN epoch-2 video frame, generated from its first TTS
+            # chunk — transition bridge frames arrive earlier and don't
+            # count).
             deadline = time.perf_counter() + _RESUME_DEADLINE_S
             while (
-                _first_epoch2_frame_ts(obs) is None
+                _first_driven_epoch2_frame_ts(obs, transition_frames) is None
                 and time.perf_counter() < deadline
             ):
                 await asyncio.sleep(0.02)
-            utt2_ts = _first_epoch2_frame_ts(obs)
+            utt2_ts = _first_driven_epoch2_frame_ts(obs, transition_frames)
             if utt2_ts is None:
                 error = "no epoch-2 response within deadline"
                 await asyncio.sleep(1.0)
@@ -515,11 +541,19 @@ async def _run_session(
         row["tts_samples_at_cancel"] = (
             sum(n for ts, n in obs["tts_chunks"] if ts <= interrupt_sent) // 2
         )
-        # Epoch-2 anchor: first epoch-2 video frame (client clock) and
-        # the matching audio.wav sample offset (for clip muxing).
+        # Epoch-2 anchors (client clock): ``utt2_start_s`` = first
+        # epoch-2 frame (the P-A L5 "first new frame"; with P-D this is
+        # the first transition bridge frame), ``utt2_driven_start_s`` =
+        # first utterance-2-driven frame (the phoneme-clock anchor —
+        # equals ``utt2_start_s`` when the transition is off). The
+        # audio.wav sample offset points at the utterance-2 audio start
+        # (transition frames arrive before any utterance-2 audio).
+        row["transition_frames"] = max(0, transition_frames)
         utt2_ts = _first_epoch2_frame_ts(obs)
-        if utt2_ts is not None:
+        driven_ts = _first_driven_epoch2_frame_ts(obs, transition_frames)
+        if utt2_ts is not None and driven_ts is not None:
             row["utt2_start_s"] = round(utt2_ts - t0, 4)
+            row["utt2_driven_start_s"] = round(driven_ts - t0, 4)
             row["utt2_audio_sample_offset"] = (
                 sum(n for ts, n in obs["tts_chunks"] if ts <= utt2_ts) // 2
             )
@@ -599,6 +633,8 @@ async def main_async(argv: list[str] | None = None) -> int:
                         help="post-interrupt response duration")
     parser.add_argument("--out", type=str,
                         default="data/interruption_eval/dataset")
+    parser.add_argument("--transition", type=int, default=3,
+                        help="P-D barge-in transition frames (0 = hard cut)")
     parser.add_argument("--smoke", action="store_true",
                         help="tiny grid: 2 avatars x 2 points, 2 seeds")
     args = parser.parse_args(argv)
@@ -611,7 +647,8 @@ async def main_async(argv: list[str] | None = None) -> int:
         points, seeds = max(1, args.points), max(1, args.seeds)
 
     _install_synth_tts()
-    server, _thread, port = _start_server(avatars)
+    server, _thread, port = _start_server(avatars,
+                                          transition_frames=args.transition)
     base = f"http://{_HOST}:{port}"
     ws_base = f"ws://{_HOST}:{port}"
 
@@ -640,6 +677,7 @@ async def main_async(argv: list[str] | None = None) -> int:
                         http, base, ws_base, avatar_id=avatar_id, seed=seed,
                         interrupt_at=interrupt_at, out_dir=out_dir,
                         utt_s=args.duration, utt2_s=args.duration2,
+                        transition_frames=args.transition,
                     )
                     rows.append(row)
                     print(
@@ -660,6 +698,7 @@ async def main_async(argv: list[str] | None = None) -> int:
         "avatars": avatars,
         "points": points,
         "seeds": seeds,
+        "transition_frames": max(0, args.transition),
         "rows": [
             {k: v for k, v in r.items() if k != "frame_timeline"} for r in rows
         ],

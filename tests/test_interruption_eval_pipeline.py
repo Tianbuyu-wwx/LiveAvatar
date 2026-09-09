@@ -521,3 +521,28 @@ class TestRecordRoundTrip:
         assert os.path.isfile(os.path.join(d, "frames", last_frame))
         # Phoneme schedule matches the seed (1.5 s utterance).
         assert row["utterance"]["events"], "ground-truth events must be present"
+
+        # P-D: the recorder's default transition (3 frames) leads epoch 2 —
+        # the first epoch-2 frame is the boundary, and the transition's
+        # α=1 frame is the fully-closed target, so openness must dip near
+        # closed within the first three epoch-2 frames regardless of where
+        # the cut lands. (A dropped transition sentinel would publish
+        # utterance-2 frames instead — voiced speech stays well above 0.15.)
+        first_e2 = next(
+            i for i, fr in enumerate(row["frame_timeline"]) if fr["epoch"] > 1
+        )
+        assert row["frame_timeline"][first_e2]["boundary"], (
+            "boundary must lead epoch 2"
+        )
+        import analyze as az
+
+        e2_ops = []
+        for fr in row["frame_timeline"][first_e2 : first_e2 + 3]:
+            img = cv2.imdecode(
+                np.fromfile(os.path.join(d, "frames", fr["file"]), dtype=np.uint8),
+                cv2.IMREAD_COLOR,
+            )
+            e2_ops.append(az.extract_openness(img))
+        assert min(e2_ops) < 0.15, (
+            f"transition must reach the closed neutral state, got {e2_ops}"
+        )

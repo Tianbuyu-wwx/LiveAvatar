@@ -55,6 +55,7 @@ from typing import Any
 
 from ._common.loopqueue import LoopFreeQueue
 from .lease import CancelToken
+from .runtime.transition import clamp_frames
 from .worker import AvatarFrame, AvatarWorker
 
 logger = logging.getLogger("liveavatar.adapter")
@@ -76,6 +77,8 @@ class AvatarAdapterStats:
     degraded: bool = False
     queue_high_water: int = 0
     lease_acquired: bool = False
+    # P-D: transition frames published on barge-in (0 when disabled).
+    transition_frames_published: int = 0
 
 
 @dataclass
@@ -85,6 +88,9 @@ class _PendingChunk:
     pcm_s16le: bytes
     pts_us: int
     epoch: int
+    # P-D sentinel: no audio — the consumer renders the barge-in transition
+    # frames (mouth-close easing) and publishes them with ``epoch``.
+    transition: bool = False
 
 
 # Loop-free bounded FIFO: survives event-loop changes (request-per-loop
@@ -115,6 +121,11 @@ class AvatarStreamingAdapter:
     queue_capacity : int
         Maximum pending PCM chunks. ``push_pcm`` blocks (with timeout)
         when full to apply backpressure on the TTS stream.
+    transition_frames : int
+        P-D: number of transition frames (2-4 = 80-160 ms at 25 fps) to
+        render on barge-in, clamped by
+        :func:`liveavatar.runtime.transition.clamp_frames`. ``0`` disables
+        the transition entirely (hard cut — the P-B baseline behavior).
     """
 
     def __init__(
@@ -130,6 +141,7 @@ class AvatarStreamingAdapter:
         queue_capacity: int = 32,
         metrics: Any = None,
         push_timeout_s: float = 0.05,
+        transition_frames: int = 3,
     ) -> None:
         if pool is None and worker is None:
             raise ValueError(
@@ -169,6 +181,13 @@ class AvatarStreamingAdapter:
         # published for the new epoch (marks the "new_frame" layer).
         self._metrics = metrics
         self._pending_new_frame_mark = False
+
+        # P-D: barge-in transition synthesis. Clamped to the legal 0-4
+        # range (0 = disabled); the sentinel is enqueued on cancel_epoch.
+        self._transition_frames = clamp_frames(transition_frames)
+        # Freshest published PTS — transition frames continue this clock so
+        # they never travel backwards relative to the old-epoch tail.
+        self._last_pts_us = 0
 
     # ---------------------------------------------------------- lifecycle
 
@@ -348,12 +367,25 @@ class AvatarStreamingAdapter:
         drained = 0
         while not self._queue.empty():
             try:
-                self._queue.get_nowait()
-                drained += 1
+                chunk = self._queue.get_nowait()
+                # Transition sentinels are not PCM chunks — don't count them.
+                if chunk is not None and not chunk.transition:
+                    drained += 1
             except asyncio.QueueEmpty:
                 break
         if drained:
             self.stats.frames_dropped_epoch += drained
+
+        # P-D: enqueue the transition sentinel AFTER the drain so it precedes
+        # any new-epoch chunk in the FIFO — the mouth-close frames publish
+        # before the new utterance's first frame. ``offer`` never blocks
+        # (the queue was just drained, so this always fits). Workers without
+        # a transition implementation render nothing and the hard cut is
+        # preserved end to end.
+        if self._transition_frames > 0 and not self._stopped:
+            self._queue.offer(
+                _PendingChunk(pcm_s16le=b"", pts_us=0, epoch=new_epoch, transition=True)
+            )
 
         # Reset degradation — the next epoch starts fresh.
         if self.stats.degraded:
@@ -391,6 +423,12 @@ class AvatarStreamingAdapter:
                     self.stats.frames_dropped_epoch += 1
                     continue
 
+                # P-D: transition sentinel — render + publish the mouth-close
+                # easing frames, then keep draining (utterance-2 chunks follow).
+                if chunk.transition:
+                    await self._publish_transition_frames(chunk.epoch)
+                    continue
+
                 await self._process_chunk(chunk)
         except asyncio.CancelledError:
             raise
@@ -399,6 +437,51 @@ class AvatarStreamingAdapter:
                 "avatar_consume_loop_crashed",
                 extra={"session_id": self._session_id},
             )
+
+    async def _publish_transition_frames(self, epoch: int) -> None:
+        """P-D: render + publish the barge-in transition frames.
+
+        Asks the active worker for its mouth-close easing frames (latent
+        interpolation on MuseTalk, pixel crossfade on the eval proxy, ``[]``
+        on workers without visual state) and publishes them with the NEW
+        epoch. The first published frame carries the epoch-boundary keyframe
+        flag (set by ``cancel_epoch`` on the sink) and stamps the P-A
+        ``new_frame`` timeline layer — transition frames ARE the first
+        frames of the new epoch, matching the paper's L5 definition.
+
+        Failure semantics: a raising worker degrades to the hard cut (the
+        exception is logged, publication continues with the next chunk); a
+        second barge-in mid-transition (``epoch < current``) stops the
+        remaining frames immediately.
+        """
+        worker = self._active_worker
+        try:
+            rendered = worker.render_transition_frames(self._transition_frames)
+        except Exception:
+            logger.exception(
+                "transition_render_error",
+                extra={"session_id": self._session_id, "epoch": epoch},
+            )
+            return
+
+        pts_increment_us = 1_000_000 // worker.target_fps
+        pts_us = self._last_pts_us
+        for frame_data, is_speaking in rendered:
+            if epoch < self._current_epoch or self._stopped:
+                return  # a newer barge-in landed mid-transition
+            pts_us += pts_increment_us
+            await self._publish_frame(
+                AvatarFrame(
+                    frame_data=frame_data,
+                    pts_us=pts_us,
+                    epoch=epoch,
+                    width=worker.width,
+                    height=worker.height,
+                    is_speaking=is_speaking,
+                ),
+                epoch,
+            )
+            self.stats.transition_frames_published += 1
 
     async def _process_chunk(self, chunk: _PendingChunk) -> None:
         """Infer one PCM chunk and publish its frames.
@@ -483,14 +566,21 @@ class AvatarStreamingAdapter:
         if self._publisher is None:
             self.published_frames.append(frame)
             self.stats.frames_published += 1
+            self._track_pts(frame)
             self._mark_new_frame_if_pending()
             return
         published = await self._publisher.publish_frame(frame, epoch)
         if published:
             self.stats.frames_published += 1
+            self._track_pts(frame)
             self._mark_new_frame_if_pending()
         elif self._publisher.current_epoch > epoch:
             self.stats.frames_dropped_epoch += 1
+
+    def _track_pts(self, frame: AvatarFrame) -> None:
+        """Remember the freshest published PTS (P-D transition clock base)."""
+        if frame.pts_us > self._last_pts_us:
+            self._last_pts_us = frame.pts_us
 
     def _mark_new_frame_if_pending(self) -> None:
         """Stamp the ``new_frame`` timeline layer on the new epoch's first frame."""

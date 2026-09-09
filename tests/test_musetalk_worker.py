@@ -63,6 +63,18 @@ if torch is not None:
             batch = latents.shape[0]
             return np.zeros((batch, 64, 64, 3), dtype=np.uint8)
 
+    class _RecordingVae:
+        """_FakeVae that also captures the decoded latent batches (P-D)."""
+
+        def __init__(self) -> None:
+            self.captured: list = []
+
+        def decode_latents(self, latents):
+            import numpy as np
+
+            self.captured.append(latents.detach().clone())
+            return np.zeros((latents.shape[0], 64, 64, 3), dtype=np.uint8)
+
     class _FakeAudioProcessor:
         def audio2feat(self, audio_np):
             import numpy as np
@@ -194,6 +206,68 @@ class TestMuseTalkWorkerPaths(unittest.TestCase):
         self.assertEqual(w._coord_list, [])
         # Models (shared) are untouched.
         self.assertIsNotNone(w._unet)
+
+
+@unittest.skipIf(torch is None, "torch not installed")
+class TestMuseTalkLatentTransition(unittest.TestCase):
+    """P-D latent interpolation backend (paper §4.4, torch-gated)."""
+
+    def _make_worker(self):
+        tmp_obj = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_obj.cleanup)
+        vae = _RecordingVae()
+        models = _fake_shared_models()
+        models["vae"] = vae
+        worker = MuseTalkAvatarWorker(
+            _make_avatar(tmp_obj.name),
+            target_fps=25,
+            width=64,
+            height=64,
+            batch_size=4,
+            device="cpu",
+            is_half=False,
+            shared_models=models,
+        )
+        worker._paste_back = lambda res_frame, idx: res_frame
+        return worker, vae
+
+    def test_no_transition_before_first_inference(self):
+        w, vae = self._make_worker()
+        self.assertEqual(w.render_transition_frames(3), [])
+        self.assertEqual(vae.captured, [])
+
+    def test_disabled_length_renders_nothing(self):
+        w, vae = self._make_worker()
+        w._last_pred_latent = torch.ones(1, 4, 8, 8)
+        self.assertEqual(w.render_transition_frames(0), [])
+        self.assertEqual(vae.captured, [])
+
+    def test_latent_interpolation_math(self):
+        import numpy as np
+
+        w, vae = self._make_worker()
+        # z_now = last predicted latent (spoken), z_closed = neutral
+        # reference latent. Values 1.0 / 3.0 make the blend arithmetic
+        # easy to verify: z_i = (1-α_i)·1 + α_i·3.
+        w._last_pred_latent = torch.full((1, 4, 8, 8), 1.0)
+        w._input_latent_list[0] = torch.full((1, 4, 8, 8), 3.0)
+
+        frames = w.render_transition_frames(3)
+        self.assertEqual(len(frames), 3)
+        for data, speaking in frames:
+            self.assertFalse(speaking)
+            self.assertEqual(len(data), 64 * 64 * 3)
+
+        self.assertEqual(len(vae.captured), 1)  # one batched VAE decode
+        zs = vae.captured[0]
+        self.assertEqual(tuple(zs.shape), (3, 4, 8, 8))
+        expected = [1.0 + a * 2.0 for a in (1 / 3, 2 / 3, 1.0)]
+        for i, exp in enumerate(expected):
+            np.testing.assert_allclose(
+                zs[i].numpy(), np.full((4, 8, 8), exp), atol=1e-6
+            )
+        # The transition does not consume reference-frame indices.
+        self.assertEqual(w._frame_index, 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

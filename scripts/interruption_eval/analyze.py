@@ -21,6 +21,10 @@ one avatar batch (4 frames @ 25 fps), so frame ``k`` of an epoch sits at
   epoch-2 anchor (arrival difference between the first epoch-2 frame and
   the first epoch-1 frame — both generated from their utterance's first
   TTS chunk);
+- P-D transition frames (the first ``transition_frames`` epoch-2
+  frames, published at cancel time) map to ``cut_u + (i+1) × period``:
+  they ease the mouth shut right after the cut, so they belong to the
+  utterance-1 clock, not to the utterance-2 schedule;
 - the screen-freeze gap between the cut and the epoch-2 anchor holds the
   last rendered openness (zero-order hold): with no new frames the
   browser keeps showing the last one, which IS the hard-cut artifact.
@@ -115,7 +119,14 @@ def load_series(session_dir: str) -> dict[str, Any]:
 
     ``u`` is the utterance-1 wall clock (seconds since utterance 1
     started): epoch-1 frames at ``k1 × period``, epoch-2 frames at
-    ``u2_0 + k2 × period`` (see module docstring).
+    ``u2_0 + k2 × period`` (see module docstring). P-D transition
+    frames (the first ``transition_frames`` epoch-2 frames, published
+    at cancel time) sit BETWEEN the two clocks: they ease the mouth
+    shut right after the cut, so frame ``i`` maps to
+    ``cut_u + (i+1) × period`` on the utterance-1 clock; the driven
+    utterance-2 frames anchor at ``utt2_driven_start_s`` (P-B datasets
+    without that field fall back to ``utt2_start_s``, which is then
+    the same instant).
     """
     import cv2
 
@@ -133,17 +144,30 @@ def load_series(session_dir: str) -> dict[str, Any]:
         op[i] = extract_openness(img)
 
     period = float(meta.get("frame_period_s") or 0.04)
+    n_trans = int(meta.get("transition_frames") or 0)
+    cut_u = meta.get("cut_in_utterance_s")
+    driven = meta.get("utt2_driven_start_s")
+    u2_start = meta.get("utt2_start_s")
+    anchor = driven if driven is not None else u2_start
+    u2_0: float | None = None
+    if anchor is not None and len(timeline):
+        u2_0 = float(anchor) - float(ts[0])
     u = np.empty(len(timeline), dtype=np.float64)
     if len(timeline):
-        t_first = float(ts[0])
-        u2_0: float | None = None
-        if meta.get("utt2_start_s") is not None:
-            u2_0 = float(meta["utt2_start_s"]) - t_first
         k1 = k2 = 0
+        n_seen = 0
         for i, e in enumerate(epochs):
             if e > 1 and u2_0 is not None:
-                u[i] = u2_0 + k2 * period
-                k2 += 1
+                if n_seen < n_trans and cut_u is not None:
+                    # Transition bridge frame i (α-schedule): rendered at
+                    # the cut, one frame slot later on the utterance-1
+                    # clock — the ZOH grid at the cut instant still holds
+                    # the last pre-cut frame.
+                    u[i] = float(cut_u) + (n_seen + 1) * period
+                    n_seen += 1
+                else:
+                    u[i] = u2_0 + k2 * period
+                    k2 += 1
             else:
                 u[i] = k1 * period
                 k1 += 1
@@ -246,9 +270,14 @@ def analyze_session(
 
             # ── phoneme-viseme mismatch on the ACTUAL post-cut audio ──
             # Audio in [cut, cut+delta]: pause (silence) until the
-            # epoch-2 anchor, then the utterance-2 schedule.
-            u2_0 = float(meta["utt2_start_s"]) - float(s["ts"][0]) \
-                if meta.get("utt2_start_s") is not None else None
+            # utterance-2 DRIVEN anchor (transition bridge frames arrive
+            # before any utterance-2 audio), then the utterance-2
+            # schedule.
+            anchor = meta.get("utt2_driven_start_s")
+            if anchor is None:
+                anchor = meta.get("utt2_start_s")
+            u2_0 = float(anchor) - float(s["ts"][0]) if anchor is not None \
+                else None
             merged: list[dict] = []
             if u2_0 is not None:
                 merged.append({
