@@ -437,6 +437,10 @@ class MuseTalkAvatarWorker(AvatarWorker):
         if z_closed.dim() == 3:  # [C,H,W] → batch-of-one, matching z_now
             z_closed = z_closed.unsqueeze(0)
         z_closed = z_closed.to(device=z_now.device, dtype=z_now.dtype)
+        # The UNet predicts the 4-ch masked-frame latent; the input reference
+        # latent is the 8-ch cat([masked, ref]). Project the closed-mouth
+        # target into prediction space (masked half) before interpolating.
+        z_closed = z_closed[:, : z_now.shape[1]]
 
         alphas = torch.as_tensor(alpha, dtype=z_now.dtype, device=z_now.device)
         shape = (-1,) + (1,) * (z_now.dim() - 1)

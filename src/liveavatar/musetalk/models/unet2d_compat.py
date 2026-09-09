@@ -518,10 +518,18 @@ class UNet2DConditionCompat(nn.Module):
             "center_input_sample",
             "freq_shift",
             "transformer_layers_per_block",
+            # MuseTalk v15 upstream config carries these two; both are
+            # no-ops for this architecture (version metadata / scale = 1).
+            "_diffusers_version",
+            "mid_block_scale_factor",
         }
         unknown = set(cfg) - supported
         if unknown:
             raise ValueError(f"unsupported unet config keys: {sorted(unknown)}")
+        if cfg.get("mid_block_scale_factor", 1) != 1:
+            raise ValueError(
+                f"unsupported mid_block_scale_factor: {cfg.get('mid_block_scale_factor')}"
+            )
         if cfg.get("transformer_layers_per_block", 1) != 1:
             raise ValueError("transformer_layers_per_block > 1 unsupported")
         if cfg.get("mid_block_type", "UNetMidBlock2DCrossAttn") != "UNetMidBlock2DCrossAttn":

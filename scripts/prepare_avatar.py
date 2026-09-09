@@ -175,7 +175,14 @@ def _detect_faces(
             )
             pts5 = None if pts_norm is None else pts_norm * np.array([fw, fh], np.float32)
         if pts5 is not None:
-            mask_coords_list.append(_mask_box_from_points5(pts5, fw, fh))
+            mx1, my1, mx2, my2 = _mask_box_from_points5(pts5, fw, fh)
+            # MuseTalk blending pastes the face crop INSIDE the mask crop
+            # box, so the box must contain the (chin-expanded) detection
+            # bbox — expand to guarantee containment (else _paste_back
+            # broadcasts out of bounds at inference time).
+            mx1, my1 = min(mx1, x1), min(my1, y1)
+            mx2, my2 = max(mx2, x2), max(my2, y2)
+            mask_coords_list.append((int(mx1), int(my1), int(mx2), int(my2)))
             continue
         pad = int(bw * 0.25)
         mx1 = max(0, x1 - pad)
