@@ -352,6 +352,24 @@ async def cmd_run(args: argparse.Namespace) -> int:
     avatars = [a for a in args.avatars.split(",") if a]
     grid = _interrupt_grid(args.points)
     rows: list[dict] = []
+    if args.references:
+        # Uninterrupted reference sessions (V-APT baseline curves), one per
+        # seed on the first avatar — mirrors record.py's convention.
+        for seed in range(1, args.points + 1):
+            out_dir = out_root / f"reference_{avatars[0]}_seed{seed}"
+            try:
+                meta = await run_reference(
+                    args.base, avatars[0], seed, 0, wav_dir, out_dir
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[FAIL] ref seed{seed}: {exc}")
+                rows.append({"avatar_id": avatars[0], "seed": seed,
+                             "repeat": 0, "kind": "reference",
+                             "error": str(exc)})
+                continue
+            rows.append(meta)
+            print(f"[ref {seed}/{args.points}]", flush=True)
+            await asyncio.sleep(args.session_gap)
     for avatar in avatars:
         for repeat in range(1, args.repeats + 1):
             for i, t_int in enumerate(grid):
