@@ -65,6 +65,27 @@ class SessionMetrics:
     timeline_stamps: dict[str, int] = field(default_factory=dict)
     timeline_interrupt_seq: int = 0
 
+    # P-C: energy-valley cut stats (one record per confirmed interrupt
+    # where the TTS adapter exposed a pending audio tail). ``found`` =
+    # a valley (or EOU prior) was selected; otherwise the hard cut kept.
+    valley_cut_count: int = 0
+    valley_hit_count: int = 0
+    valley_rollback_ms: float | None = None
+
+    def record_valley_cut(self, found: bool, rollback_ms: float) -> None:
+        """Record one energy-valley cut decision (P-C, paper §4.3)."""
+        self.valley_cut_count += 1
+        if found:
+            self.valley_hit_count += 1
+        self.valley_rollback_ms = rollback_ms
+
+    @property
+    def valley_hit_rate(self) -> float | None:
+        """Fraction of cuts where a valley was found, or None."""
+        if self.valley_cut_count == 0:
+            return None
+        return self.valley_hit_count / self.valley_cut_count
+
     def timeline_mark(self, layer: str) -> int:
         """Stamp one timeline layer (first write wins, idempotent)."""
         stamps = self.timeline_stamps
@@ -163,6 +184,9 @@ class SessionMetrics:
             "interrupt_count": self.interrupt_count,
             "flush_count": self.flush_count,
         }
+        if self.valley_cut_count:
+            out["valley_hit_rate"] = self.valley_hit_rate
+            out["valley_rollback_ms"] = self.valley_rollback_ms
         if self.timeline_stamps:
             out["interruption_timeline"] = self.timeline_decompose_ms()
         return out

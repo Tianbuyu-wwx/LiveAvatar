@@ -28,6 +28,7 @@ from liveavatar.runtime.contracts import (
 )
 from liveavatar.runtime.fake_tts import FakeTts
 from liveavatar.runtime.queues import BoundedAsyncQueue
+from liveavatar.runtime.valley import find_valley_cut
 from liveavatar.text_source import sentence_stream
 
 logger = logging.getLogger("liveavatar.runtime.worker")
@@ -121,6 +122,12 @@ class RealtimeWorker:
         # orchestrator to e.g. cancel the Tutor publisher. Keeps the worker
         # as the single source of truth for epoch authority.
         self.on_epoch_advance: EpochAdvanceCallback | None = None
+        # P-C: latest client-reported playback position (from playback_ack
+        # events) and the last energy-valley cut decision, carried on the
+        # flush control event so a downstream player can play the pending
+        # tail up to the valley before stopping.
+        self._consumed_pts_us: int = 0
+        self._last_valley_cut: dict[str, Any] | None = None
 
         # Use injected adapters, or fall back to reference implementations.
         if vad is not None:
@@ -209,6 +216,14 @@ class RealtimeWorker:
 
     def advance_epoch(self) -> int:
         m = self.metrics
+        # P-C: pick the energy-valley cut BEFORE the cancel drops the
+        # pending tail (needs the old-epoch segments still alive). Pure
+        # numpy over ≤ a few hundred ms of PCM — well inside the
+        # interrupt latency budget.
+        valley = self._pick_valley_cut()
+        self._last_valley_cut = valley
+        if m is not None and valley is not None:
+            m.record_valley_cut(bool(valley["found"]), float(valley["rollback_ms"]))
         self.epoch += 1
         self.input_queue.advance_epoch(self.epoch)
         self.output_queue.advance_epoch(self.epoch)
@@ -251,6 +266,38 @@ class RealtimeWorker:
             except Exception:
                 pass
         return self.epoch
+
+    def _pick_valley_cut(self) -> dict[str, Any] | None:
+        """P-C: energy-valley cut decision for the pending TTS tail.
+
+        Returns ``None`` when there is nothing to refine (no TTS adapter
+        support for ``pending_audio_tail``, or no pending audio) — the
+        flush then keeps the plain hard-cut semantics.
+        """
+        tts = self.tts
+        getter = getattr(tts, "pending_audio_tail", None)
+        if not callable(getter):
+            return None
+        try:
+            pending = getter(self._consumed_pts_us)
+        except Exception:
+            logger.exception(
+                "valley_pending_audio_error",
+                extra={"session_id": self.session_id},
+            )
+            return None
+        if not pending:
+            return None
+        sr = int(getattr(tts, "sample_rate", 16000) or 16000)
+        cut = find_valley_cut(pending, sample_rate=sr)
+        return {
+            "found": cut.found,
+            "reason": cut.reason,
+            "rollback_ms": round(cut.rollback_ms, 2),
+            # Absolute point on the playback timeline where the pending
+            # tail should stop — actionable for a downstream player.
+            "cut_pts_us": self._consumed_pts_us + int(cut.cut_sample / sr * 1_000_000),
+        }
 
     # ----------------------------------------------------- AEC / PTT / phones
 
@@ -330,13 +377,15 @@ class RealtimeWorker:
             old = self.epoch
             self.advance_epoch()
             self.stats.cancelled_segments += self.tts.cancel_epoch(self.epoch)
+            flush_meta: dict[str, Any] = {"old_epoch": old, "new_epoch": self.epoch}
+            if self._last_valley_cut is not None:
+                # P-C: downstream players may play the pending tail up to
+                # ``cut_pts_us`` (the energy valley) before stopping.
+                flush_meta["valley"] = self._last_valley_cut
             self.output_queue.enqueue(
                 self._make_envelope(
                     "control",
-                    ControlEvent(
-                        intent="flush",
-                        metadata={"old_epoch": old, "new_epoch": self.epoch},
-                    ),
+                    ControlEvent(intent="flush", metadata=flush_meta),
                 ),
                 epoch=self.epoch,
             )
@@ -364,12 +413,17 @@ class RealtimeWorker:
             self.stats.control_events_out += 1
         elif intent == "playback_ack":
             self.stats.playback_acks += 1
+            consumed = int(event.get("consumed_pts_us", 0) or 0)
+            if consumed > self._consumed_pts_us:
+                # P-C: keep the freshest playback position for the
+                # energy-valley cut selection.
+                self._consumed_pts_us = consumed
             self.output_queue.enqueue(
                 self._make_envelope(
                     "playback_ack",
                     PlaybackAck(
                         segment_seq=event.get("segment_seq", 0),
-                        consumed_pts_us=event.get("consumed_pts_us", 0),
+                        consumed_pts_us=consumed,
                     ),
                 ),
                 epoch=self.epoch,

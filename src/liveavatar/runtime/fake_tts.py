@@ -84,3 +84,24 @@ class FakeTts:
             s for s in self.active_segments if s.pts_us + s.duration_us > consumed_pts_us
         ]
         return played
+
+    def pending_audio_tail(self, consumed_pts_us: int) -> bytes | None:
+        """P-C protocol: PCM of the not-yet-played audio tail.
+
+        Returns the concatenated s16le PCM of active segments that have
+        not finished playing by ``consumed_pts_us``, trimmed so the tail
+        starts at the current playback position; ``None`` when nothing
+        is pending. Consumed by the energy-valley cut selector
+        (``runtime.valley``) on barge-in. TTS adapters that keep no
+        server-side pending buffer simply omit this method — the worker
+        degrades to the hard cut.
+        """
+        parts: list[bytes] = []
+        for seg in sorted(self.active_segments, key=lambda s: s.pts_us):
+            if seg.pts_us + seg.duration_us <= consumed_pts_us:
+                continue
+            skip = int(max(0, consumed_pts_us - seg.pts_us) * self.sample_rate / 1_000_000)
+            parts.append(seg.pcm_s16le[skip * 2:])
+        if not parts:
+            return None
+        return b"".join(parts)
