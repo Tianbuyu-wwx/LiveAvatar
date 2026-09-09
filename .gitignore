@@ -13,6 +13,7 @@ dist/
 /avatars/
 /data/
 /logs/
+/*.log
 *.db
 *.mp4
 .env
