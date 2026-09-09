@@ -208,7 +208,9 @@ class LTClient:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(await resp.read())
 
-    def wait_event(self, status: str, after_ts: float, timeout: float) -> float | None:
+    async def wait_event(self, status: str, after_ts: float, timeout: float) -> float | None:
+        # Must await (not time.sleep): blocking here would stall the event
+        # loop and starve _sse_loop, so events could never arrive.
         deadline = time.perf_counter() + timeout
         seen = 0
         while time.perf_counter() < deadline:
@@ -216,7 +218,7 @@ class LTClient:
                 seen += 1
                 if ev.get("status") == status and ev.get("_ts", 0) >= after_ts:
                     return ev["_ts"]
-            time.sleep(0.002)
+            await asyncio.sleep(0.002)
         return None
 
 
@@ -239,7 +241,7 @@ async def run_session(
         await client.record("start_record")
         t_before_utt1 = time.perf_counter()
         await client.send_audio(utt1_path)
-        utt1_start = client.wait_event("start", t_before_utt1, timeout=10.0)
+        utt1_start = await client.wait_event("start", t_before_utt1, timeout=10.0)
         if utt1_start is None:
             raise RuntimeError("no SSE start event for utterance 1")
 
@@ -254,8 +256,8 @@ async def run_session(
         await client.send_audio(utt2_path)
         t_utt2_post = time.perf_counter()
 
-        utt2_start = client.wait_event("start", t_utt2_post, timeout=15.0)
-        utt2_end = client.wait_event("end", t_utt2_post, timeout=30.0)
+        utt2_start = await client.wait_event("start", t_utt2_post, timeout=15.0)
+        utt2_end = await client.wait_event("end", t_utt2_post, timeout=30.0)
         await asyncio.sleep(0.8)  # tail margin (last frames drain)
 
         await client.stop_speak_poll()
@@ -315,7 +317,7 @@ async def run_reference(
         await client.record("start_record")
         t_before = time.perf_counter()
         await client.send_audio(utt1_path)
-        utt1_start = client.wait_event("start", t_before, timeout=10.0)
+        utt1_start = await client.wait_event("start", t_before, timeout=10.0)
         if utt1_start is None:
             raise RuntimeError("no SSE start event (reference)")
         await asyncio.sleep(_UTT_S + 1.5)  # full utterance + tail margin

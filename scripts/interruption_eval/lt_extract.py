@@ -59,6 +59,20 @@ _FRAME_FPS = 25.0
 _YUNET = Path(__file__).resolve().parents[2] / "models" / "face_detection_yunet_2023mar.onnx"
 
 
+def _yunet_ascii_path() -> str:
+    """OpenCV's ONNX importer can fopen() non-ASCII absolute paths only when
+    the ANSI code page encodes them; on some systems it fails (repo lives at
+    E:\\项目\\). Copy the model once to an ASCII temp path and load from
+    there."""
+    import shutil
+    import tempfile
+
+    cached = Path(tempfile.gettempdir()) / "lt_extract_yunet.onnx"
+    if not cached.exists() or cached.stat().st_size != _YUNET.stat().st_size:
+        shutil.copyfile(_YUNET, cached)
+    return str(cached)
+
+
 def _pcm_float(utt: Any) -> np.ndarray:
     """Utterance.pcm_s16le bytes → float64 PCM for xcorr/energy analysis."""
     return np.frombuffer(utt.pcm_s16le, dtype=np.int16).astype(np.float64)
@@ -108,7 +122,7 @@ def _face_box(img: np.ndarray) -> tuple[int, int, int, int] | None:
     if not _YUNET.exists():
         raise FileNotFoundError(f"yunet model missing: {_YUNET}")
     h, w = img.shape[:2]
-    det = cv2.FaceDetectorYN.create(str(_YUNET), "", (w, h), 0.6)
+    det = cv2.FaceDetectorYN.create(_yunet_ascii_path(), "", (w, h), 0.6)
     _, faces = det.detect(img)
     if faces is None or len(faces) == 0:
         return None
