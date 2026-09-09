@@ -67,6 +67,7 @@ def _ws_sink_for(avatar_id: str) -> Any:
         width=cfg.width,
         height=cfg.height,
         quality=80,
+        client_queue_size=state.settings.client_queue_size,
     )
 
 

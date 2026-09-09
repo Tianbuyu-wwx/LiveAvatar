@@ -34,6 +34,10 @@ class PublishSettings:
     # Self-developed ws codec: "mjpeg" (full frames) or "region"
     # (region-delta patches; requires the avatar's region.json).
     codec: str = "mjpeg"
+    # Per-client video frame queue depth (drop-oldest). The live-viewing
+    # default (4) bounds latency under bursty render; offline recorders
+    # raise it (e.g. 512) so the captured frame sequence is lossless.
+    client_queue_size: int = 4
     # Full-duplex spoke configuration (LIVEAVATAR_ASR_URL / LLM_* /
     # VOICE_CHAR / AEC / DUPLEX_AVATAR — see liveavatar.duplex).
     duplex: DuplexSettings = field(default_factory=DuplexSettings.from_env)
@@ -54,4 +58,5 @@ class PublishSettings:
             max_ws_frame_bytes=int(
                 os.getenv("LIVEAVATAR_MAX_WS_FRAME_BYTES", "65536")
             ),
+            client_queue_size=int(os.getenv("LIVEAVATAR_CLIENT_QUEUE_SIZE", "4")),
         )
