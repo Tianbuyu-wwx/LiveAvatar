@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import sys
 import time
@@ -444,7 +445,9 @@ def main() -> int:
         )
         print(json.dumps(meta["perf_clock"], indent=2))
         return 0
-    return asyncio.run(args.fn(args))
+    if inspect.iscoroutinefunction(args.fn):
+        return asyncio.run(args.fn(args))
+    return args.fn(args)
 
 
 if __name__ == "__main__":
