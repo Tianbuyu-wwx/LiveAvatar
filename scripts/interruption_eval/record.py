@@ -62,6 +62,7 @@ import threading
 import time
 import wave
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 
 import httpx2 as httpx
@@ -72,6 +73,7 @@ from websockets.asyncio.client import connect as ws_connect
 
 from liveavatar.config import AvatarPoolConfig
 from liveavatar.pipeline import AvatarPipeline
+from liveavatar.pool import AvatarPool
 from liveavatar.publish import (
     PublishSettings,
     _service_publisher_factory,
@@ -248,7 +250,11 @@ class _MouthProxyPool:
 
 
 def _start_server(
-    avatars: list[str], *, transition_frames: int = 3
+    avatars: list[str],
+    *,
+    transition_frames: int = 3,
+    real: bool = False,
+    avatar_data_root: str = "data/avatars_real",
 ) -> tuple[uvicorn.Server, threading.Thread, int]:
     state.settings = PublishSettings()
     state.settings.codec = "mjpeg"
@@ -258,11 +264,27 @@ def _start_server(
     state.settings.duplex.with_avatar = True
     # P-D: barge-in transition length (0 = hard-cut baseline replay).
     state.settings.duplex.avatar_transition_frames = max(0, transition_frames)
-    state.pool_config = AvatarPoolConfig(avatar_data_root="nonexistent")
+    if real:
+        # P-E: real GPU MuseTalk workers on the same footage as the
+        # LiveTalking arm (same avatar ids, same Design-B protocol).
+        repo = Path(__file__).resolve().parents[2]
+        state.pool_config = AvatarPoolConfig(
+            avatar_data_root=str(repo / avatar_data_root),
+            device="cuda",
+            is_half=True,
+            max_workers=max(1, len(avatars)),
+            whisper_model_path=str(repo / "models" / "whisper"),
+            musetalk_model_dir=str(repo / "models" / "musetalkV15"),
+            vae_model_dir=str(repo / "models" / "sd-vae-ft-mse"),
+        )
+        pool: Any = AvatarPool(state.pool_config)
+    else:
+        state.pool_config = AvatarPoolConfig(avatar_data_root="nonexistent")
+        pool = _MouthProxyPool(avatars)
     state.pipeline = AvatarPipeline(
         state.pool_config,
         publisher_factory=_service_publisher_factory,
-        pool=_MouthProxyPool(avatars),
+        pool=pool,
     )
     config = uvicorn.Config(app, host=_HOST, port=0, log_level="warning")
     server = uvicorn.Server(config)
@@ -635,6 +657,14 @@ async def main_async(argv: list[str] | None = None) -> int:
                         default="data/interruption_eval/dataset")
     parser.add_argument("--transition", type=int, default=3,
                         help="P-D barge-in transition frames (0 = hard cut)")
+    parser.add_argument("--real", action="store_true",
+                        help="P-E: real GPU MuseTalk AvatarPool instead of "
+                             "the CPU mouth proxy (requires cu128 torch + "
+                             "preprocessed avatars)")
+    parser.add_argument("--avatar-ids", default="yongen,sun",
+                        help="comma-separated avatar ids for --real")
+    parser.add_argument("--avatar-data-root", default="data/avatars_real",
+                        help="avatar data root for --real")
     parser.add_argument("--smoke", action="store_true",
                         help="tiny grid: 2 avatars x 2 points, 2 seeds")
     args = parser.parse_args(argv)
@@ -642,13 +672,20 @@ async def main_async(argv: list[str] | None = None) -> int:
     if args.smoke:
         avatars = list(_AVATARS)[:2]
         points, seeds = 2, 2
+    elif args.real:
+        avatars = [a.strip() for a in args.avatar_ids.split(",") if a.strip()]
+        points, seeds = max(1, args.points), max(1, args.seeds)
     else:
         avatars = list(_AVATARS)[: max(1, args.avatars)]
         points, seeds = max(1, args.points), max(1, args.seeds)
 
     _install_synth_tts()
-    server, _thread, port = _start_server(avatars,
-                                          transition_frames=args.transition)
+    server, _thread, port = _start_server(
+        avatars,
+        transition_frames=args.transition,
+        real=args.real,
+        avatar_data_root=args.avatar_data_root,
+    )
     base = f"http://{_HOST}:{port}"
     ws_base = f"ws://{_HOST}:{port}"
 
