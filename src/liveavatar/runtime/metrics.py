@@ -27,7 +27,7 @@ domain context (track_sid, seq, segment_seq) is available.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -52,6 +52,59 @@ class SessionMetrics:
     # Cumulative counts.
     interrupt_count: int = 0
     flush_count: int = 0
+
+    # P-A: five-layer interruption timeline (None = instrumentation off).
+    # Layers in true execution order inside the realtime worker:
+    #   detect           — interrupt confirmed (control event observed)
+    #   audio_flush      — input/output queues purged for the new epoch
+    #   tts_stop         — TTS cancel requested + asyncio tasks cancelled
+    #   video_invalidate — avatar adapter/sink dropped stale-epoch frames
+    #   new_frame        — first frame of the new epoch published
+    # All stamps are time.monotonic_ns(); durations derive from consecutive
+    # layer deltas (paper §5.1 latency decomposition table).
+    timeline_stamps: dict[str, int] = field(default_factory=dict)
+    timeline_interrupt_seq: int = 0
+
+    def timeline_mark(self, layer: str) -> int:
+        """Stamp one timeline layer (first write wins, idempotent)."""
+        stamps = self.timeline_stamps
+        if layer not in stamps:
+            stamps[layer] = time.monotonic_ns()
+        return stamps[layer]
+
+    def timeline_reset(self) -> None:
+        """Start a fresh timeline window (next confirmed interrupt)."""
+        self.timeline_interrupt_seq += 1
+        self.timeline_stamps = {}
+
+    def timeline_decompose_ms(self) -> dict[str, float]:
+        """Return layer deltas in ms for the current/last interrupt.
+
+        Deltas are consecutive-layer differences (detect→audio_flush→
+        tts_stop→video_invalidate→new_frame). Layers never stamped are
+        omitted; a layer stamped *before* its predecessor (should not
+        happen in the worker's linear interrupt path) yields a negative
+        delta and is clamped to 0.0 with the raw value preserved.
+        """
+        stamps = self.timeline_stamps
+        order = [
+            "detect",
+            "audio_flush",
+            "tts_stop",
+            "video_invalidate",
+            "new_frame",
+        ]
+        known = [name for name in order if name in stamps]
+        out: dict[str, float] = {}
+        for prev, cur in zip(known, known[1:], strict=False):
+            delta = (stamps[cur] - stamps[prev]) / 1e6
+            out[f"{prev}_to_{cur}_ms"] = max(delta, 0.0)
+        if len(known) >= 2:
+            total = (stamps[known[-1]] - stamps[known[0]]) / 1e6
+            out["total_ms"] = max(total, 0.0)
+        out["layers_recorded"] = known
+        return out
+
 
     def record_first_packet(self) -> bool:
         """Record first student mic packet. Returns True if this was the first."""
@@ -101,7 +154,7 @@ class SessionMetrics:
 
     def summary(self) -> dict:
         """Return a flat dict summary suitable for logging or /metrics export."""
-        return {
+        out = {
             "session_id": self.session_id,
             "first_packet_ns": self.first_packet_ns,
             "first_playback_ns": self.first_playback_ns,
@@ -110,3 +163,6 @@ class SessionMetrics:
             "interrupt_count": self.interrupt_count,
             "flush_count": self.flush_count,
         }
+        if self.timeline_stamps:
+            out["interruption_timeline"] = self.timeline_decompose_ms()
+        return out

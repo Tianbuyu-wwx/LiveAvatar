@@ -73,6 +73,18 @@ def configure_logging(level: int = logging.INFO) -> None:
 # ──────────────────────────────────────────────── Prometheus export
 
 
+def _fmt_gauge_labeled(
+    name: str, help_text: str, value: float, labels: dict[str, str]
+) -> list[str]:
+    """Format one gauge with static labels (Prometheus exposition)."""
+    label_str = ",".join(f'{k}="{v}"' for k, v in labels.items())
+    return [
+        f"# HELP {name} {help_text}",
+        f"# TYPE {name} gauge",
+        f"{name}{{{label_str}}} {value}",
+    ]
+
+
 def _fmt_gauge(name: str, help_text: str, value: float) -> list[str]:
     return [
         f"# HELP {name} {help_text}.",
@@ -190,4 +202,28 @@ def render_metrics(state: Any) -> str:
     lines += _fmt_gauge(
         "liveavatar_uptime_seconds", "Process uptime in seconds", time.time() - _PROCESS_START
     )
+
+    # P-A: five-layer interruption timeline per duplex session. Exposes the
+    # latest interrupt's layer deltas (detect→audio_flush→tts_stop→
+    # video_invalidate→new_frame) so the latency decomposition table in the
+    # paper can be scraped alongside the raw JSON reports.
+    for session in duplex_sessions:
+        m = getattr(session, "metrics", None)
+        decompose_fn = getattr(m, "timeline_decompose_ms", None)
+        if not callable(decompose_fn):
+            continue
+        try:
+            decomposed = decompose_fn()
+        except Exception:  # pragma: no cover - defensive, pure dict math
+            continue
+        sid = str(getattr(m, "session_id", "") or "")
+        for key, value in decomposed.items():
+            if key == "layers_recorded" or not isinstance(value, (int, float)):
+                continue
+            lines += _fmt_gauge_labeled(
+                f"liveavatar_interrupt_{key}",
+                f"Interruption timeline {key}",
+                float(value),
+                {"session_id": sid},
+            )
     return "\n".join(lines) + "\n"

@@ -182,6 +182,7 @@ def resolve_avatar_adapter(
     *,
     fallback_worker: Any = None,
     degrade_after_errors: int | None = None,
+    metrics: Any = None,
 ) -> Any:
     """AvatarStreamingAdapter feeding ``publisher`` from ``pool``.
 
@@ -200,6 +201,7 @@ def resolve_avatar_adapter(
         publisher=publisher,
         session_id=session_id,
         avatar_id=avatar_id,
+        metrics=metrics,
         **kwargs,
     )
 

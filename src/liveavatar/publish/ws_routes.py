@@ -139,6 +139,13 @@ async def _duplex_audio_ws(websocket: WebSocket, duplex: DuplexSession) -> None:
                 ctype = ctrl.get("type")
                 if ctype in ("cancel", "epoch"):
                     # Barge-in: the worker is the epoch authority.
+                    # P-A: the portal receive instant is the "detect" layer —
+                    # stamp it before advance_epoch marks the middle layers.
+                    try:
+                        duplex.metrics.timeline_reset()
+                        duplex.metrics.timeline_mark("detect")
+                    except Exception:  # pragma: no cover - defensive
+                        pass
                     new_epoch = duplex.cancel_epoch()
                     logger.info(
                         "duplex_barge_in",

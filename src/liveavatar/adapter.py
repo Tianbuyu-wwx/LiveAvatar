@@ -128,6 +128,7 @@ class AvatarStreamingAdapter:
         fallback_worker: AvatarWorker | None = None,
         degrade_after_errors: int = 3,
         queue_capacity: int = 32,
+        metrics: Any = None,
         push_timeout_s: float = 0.05,
     ) -> None:
         if pool is None and worker is None:
@@ -163,6 +164,11 @@ class AvatarStreamingAdapter:
 
         # Track the latest epoch seen for stale-chunk filtering.
         self._current_epoch = 0
+
+        # P-A timeline: set on cancel_epoch, consumed by the first frame
+        # published for the new epoch (marks the "new_frame" layer).
+        self._metrics = metrics
+        self._pending_new_frame_mark = False
 
     # ---------------------------------------------------------- lifecycle
 
@@ -326,6 +332,8 @@ class AvatarStreamingAdapter:
         if new_epoch <= self._current_epoch:
             return
         self._current_epoch = new_epoch
+        # P-A: the next published frame is the first frame of the new epoch.
+        self._pending_new_frame_mark = True
 
         if self._cancel_token is not None:
             self._cancel_token.cancel()
@@ -475,9 +483,18 @@ class AvatarStreamingAdapter:
         if self._publisher is None:
             self.published_frames.append(frame)
             self.stats.frames_published += 1
+            self._mark_new_frame_if_pending()
             return
         published = await self._publisher.publish_frame(frame, epoch)
         if published:
             self.stats.frames_published += 1
+            self._mark_new_frame_if_pending()
         elif self._publisher.current_epoch > epoch:
             self.stats.frames_dropped_epoch += 1
+
+    def _mark_new_frame_if_pending(self) -> None:
+        """Stamp the ``new_frame`` timeline layer on the new epoch's first frame."""
+        if self._pending_new_frame_mark:
+            self._pending_new_frame_mark = False
+            if self._metrics is not None:
+                self._metrics.timeline_mark("new_frame")

@@ -208,10 +208,23 @@ class RealtimeWorker:
         ).to_dict()
 
     def advance_epoch(self) -> int:
+        m = self.metrics
         self.epoch += 1
         self.input_queue.advance_epoch(self.epoch)
         self.output_queue.advance_epoch(self.epoch)
+        # P-A timeline: queues purged for the new epoch.
+        if m is not None:
+            m.timeline_mark("audio_flush")
         self.tts.cancel_epoch(self.epoch)
+        # Promptly cancel in-flight streaming-TTS tasks so torch inference
+        # stops ASAP (the adapter's cancel_token also breaks the generator,
+        # but cancelling the asyncio task wakes it immediately). Kept before
+        # the avatar cancel so the P-A timeline layers (tts_stop →
+        # video_invalidate) match true execution order.
+        self._cancel_tts_tasks()
+        # P-A timeline: TTS cancel requested + in-flight tasks cancelled.
+        if m is not None:
+            m.timeline_mark("tts_stop")
         # Cancel Avatar video inference in lockstep with TTS so an interrupt
         # stops both audio and video within one frame. The adapter forwards
         # the new epoch to the AvatarVideoPublisher (drops stale-epoch frames
@@ -219,10 +232,9 @@ class RealtimeWorker:
         # the worker's synthesize_video_stream generator promptly).
         if self.avatar_adapter is not None:
             self.avatar_adapter.cancel_epoch(self.epoch)
-        # Promptly cancel in-flight streaming-TTS tasks so torch inference
-        # stops ASAP (the adapter's cancel_token also breaks the generator,
-        # but cancelling the asyncio task wakes it immediately).
-        self._cancel_tts_tasks()
+            # P-A timeline: stale-epoch frames invalidated at the adapter/sink.
+            if m is not None:
+                m.timeline_mark("video_invalidate")
         if self.asr:
             self.asr.advance_epoch(self.epoch)
         # Reset VAD and EOU state for the new epoch.
@@ -303,6 +315,10 @@ class RealtimeWorker:
             # publisher + TTS + purges queues).
             if self.metrics is not None:
                 self.metrics.record_interrupt()
+                # P-A: begin a fresh five-layer timeline; "detect" is stamped
+                # at the top of this branch (first confirmed-interrupt site).
+                self.metrics.timeline_reset()
+                self.metrics.timeline_mark("detect")
                 logger.info(
                     "trace_interrupt",
                     extra={

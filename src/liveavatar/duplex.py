@@ -184,6 +184,7 @@ class DuplexSession:
             avatar_id,
             sink,
             fallback_worker=static_fallback_worker(avatar_id),
+            metrics=self.metrics,
         )
 
         self.worker = worker or RealtimeWorker(
@@ -368,7 +369,7 @@ class DuplexSession:
     # ----------------------------------------------------------- stats
 
     def stats(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "session_id": self.session_id,
             "avatar_id": self.avatar_id,
             "mode": "duplex",
@@ -377,6 +378,13 @@ class DuplexSession:
             "worker": vars(self.worker.stats),
             "spokes": self.settings.describe(),
         }
+        # P-A: include the metrics summary (with the five-layer interruption
+        # timeline when an interrupt has occurred) for the baseline recorder.
+        try:
+            out["metrics"] = self.metrics.summary()
+        except Exception:  # pragma: no cover - defensive, summary is pure
+            pass
+        return out
 
     # ---------------------------------------------------------- internals
 
