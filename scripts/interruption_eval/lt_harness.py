@@ -38,6 +38,11 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
+try:  # aiortc only exists in the LiveTalking venv
+    from aiortc.mediastreams import MediaStreamError
+except ImportError:  # pragma: no cover - prepare-only environments
+    MediaStreamError = ConnectionError  # type: ignore[assignment,misc]
+
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
@@ -101,6 +106,29 @@ class LTClient:
         # recv-only audio+video transceivers
         pc.addTransceiver("audio", direction="recvonly")
         pc.addTransceiver("video", direction="recvonly")
+        # MUST consume the media tracks: LiveTalking starts its render/
+        # inference pipeline on the FIRST server-side track.recv() call, and
+        # the SSE start event is emitted when the frame carrying the start
+        # eventpoint is consumed. A signaling-only client therefore never
+        # sees {"status": "start"} (the exact failure mode of the 1st matrix
+        # attempt). A real browser always plays the stream — mirror that.
+        self._recv_tasks: list[asyncio.Task] = []
+
+        @pc.on("track")
+        def on_track(track: Any) -> None:
+            async def _drain() -> None:
+                while True:
+                    try:
+                        await track.recv()
+                    except (MediaStreamError, ConnectionError, OSError):
+                        return
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001
+                        return
+
+            self._recv_tasks.append(asyncio.create_task(_drain()))
+
         offer = await pc.createOffer()
         await pc.setLocalDescription(offer)
         async with http.post(
@@ -242,7 +270,7 @@ async def run_session(
             await client.record("start_record")
             t_before_utt1 = time.perf_counter()
             await client.send_audio(utt1_path)
-            utt1_start = await client.wait_event("start", t_before_utt1, timeout=10.0)
+            utt1_start = await client.wait_event("start", t_before_utt1, timeout=20.0)
             if utt1_start is None:
                 raise RuntimeError("no SSE start event for utterance 1")
 
@@ -301,6 +329,8 @@ async def run_session(
         # aiortc PC per failed attempt fills max_session (5) and every later
         # offer is rejected with "Maximum session limit reached (5/5)".
         await client.stop_speak_poll()
+        for task in getattr(client, "_recv_tasks", []):
+            task.cancel()
         try:
             await pc.close()
         except Exception:  # noqa: BLE001
@@ -324,7 +354,7 @@ async def run_reference(
             await client.record("start_record")
             t_before = time.perf_counter()
             await client.send_audio(utt1_path)
-            utt1_start = await client.wait_event("start", t_before, timeout=10.0)
+            utt1_start = await client.wait_event("start", t_before, timeout=20.0)
             if utt1_start is None:
                 raise RuntimeError("no SSE start event (reference)")
             await asyncio.sleep(_UTT_S + 1.5)  # full utterance + tail margin
@@ -353,6 +383,8 @@ async def run_reference(
         return meta
     finally:
         # Same slot-leak guard as run_session (see comment there).
+        for task in getattr(client, "_recv_tasks", []):
+            task.cancel()
         try:
             await pc.close()
         except Exception:  # noqa: BLE001
