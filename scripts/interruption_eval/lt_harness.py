@@ -34,7 +34,7 @@ import sys
 import time
 import wave
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 
@@ -234,71 +234,77 @@ async def run_session(
     client = LTClient(base, avatar)
     pc = RTCPeerConnection()
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as http:
-        await client.connect(http, pc)
-        await asyncio.sleep(0.3)  # let the peer + render loop settle
-
-        await client.record("start_record")
-        t_before_utt1 = time.perf_counter()
-        await client.send_audio(utt1_path)
-        utt1_start = await client.wait_event("start", t_before_utt1, timeout=10.0)
-        if utt1_start is None:
-            raise RuntimeError("no SSE start event for utterance 1")
-
-        if poll_speak:
-            await client.start_speak_poll()
-
-        # schedule the interrupt relative to the playback-side anchor
-        delay = interrupt_at - (time.perf_counter() - utt1_start)
-        if delay > 0:
-            await asyncio.sleep(delay)
-        t0 = await client.interrupt()
-        await client.send_audio(utt2_path)
-        t_utt2_post = time.perf_counter()
-
-        utt2_start = await client.wait_event("start", t_utt2_post, timeout=15.0)
-        utt2_end = await client.wait_event("end", t_utt2_post, timeout=30.0)
-        await asyncio.sleep(0.8)  # tail margin (last frames drain)
-
-        await client.stop_speak_poll()
-        await client.record("end_record")
-        await asyncio.sleep(0.5)  # server muxes the mp4 synchronously
-
-        mp4_path = out_dir / "recording.mp4"
-        await client.fetch_recording(mp4_path)
-
-    meta = {
-        "kind": "interrupt",
-        "system": "livetalking",
-        "protocol": "lt_design_b",
-        "sessionid": client.sessionid,
-        "avatar_id": avatar,
-        "seed": seed,
-        "repeat": repeat,
-        "interrupt_at_s": interrupt_at,
-        "utt1_wav": utt1_path.name,
-        "utt2_wav": utt2_path.name,
-        "utt1": {"seed": seed, "duration_s": _UTT_S, "sr": 16000},
-        "utterance_2": {"seed": seed + 1000, "duration_s": _UTT2_S, "sr": 16000},
-        "perf_clock": {
-            "utt1_start": utt1_start,
-            "interrupt_sent": t0,
-            "utt2_post": t_utt2_post,
-            "utt2_start": utt2_start,
-            "utt2_end": utt2_end,
-        },
-        "interrupt_to_utt2_post_ms": (t_utt2_post - t0) * 1000.0,
-        "sse_events": client.sse_events,
-        "speak_log": [[t, s] for t, s in client.speak_log],
-    }
-    (out_dir / "meta.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
     try:
-        await pc.close()
-    except Exception:  # noqa: BLE001
-        pass
-    return meta
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as http:
+            await client.connect(http, pc)
+            await asyncio.sleep(0.3)  # let the peer + render loop settle
+
+            await client.record("start_record")
+            t_before_utt1 = time.perf_counter()
+            await client.send_audio(utt1_path)
+            utt1_start = await client.wait_event("start", t_before_utt1, timeout=10.0)
+            if utt1_start is None:
+                raise RuntimeError("no SSE start event for utterance 1")
+
+            if poll_speak:
+                await client.start_speak_poll()
+
+            # schedule the interrupt relative to the playback-side anchor
+            delay = interrupt_at - (time.perf_counter() - utt1_start)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            t0 = await client.interrupt()
+            await client.send_audio(utt2_path)
+            t_utt2_post = time.perf_counter()
+
+            utt2_start = await client.wait_event("start", t_utt2_post, timeout=15.0)
+            utt2_end = await client.wait_event("end", t_utt2_post, timeout=30.0)
+            await asyncio.sleep(0.8)  # tail margin (last frames drain)
+
+            await client.stop_speak_poll()
+            await client.record("end_record")
+            await asyncio.sleep(0.5)  # server muxes the mp4 synchronously
+
+            mp4_path = out_dir / "recording.mp4"
+            await client.fetch_recording(mp4_path)
+
+        meta = {
+            "kind": "interrupt",
+            "system": "livetalking",
+            "protocol": "lt_design_b",
+            "sessionid": client.sessionid,
+            "avatar_id": avatar,
+            "seed": seed,
+            "repeat": repeat,
+            "interrupt_at_s": interrupt_at,
+            "utt1_wav": utt1_path.name,
+            "utt2_wav": utt2_path.name,
+            "utt1": {"seed": seed, "duration_s": _UTT_S, "sr": 16000},
+            "utterance_2": {"seed": seed + 1000, "duration_s": _UTT2_S, "sr": 16000},
+            "perf_clock": {
+                "utt1_start": utt1_start,
+                "interrupt_sent": t0,
+                "utt2_post": t_utt2_post,
+                "utt2_start": utt2_start,
+                "utt2_end": utt2_end,
+            },
+            "interrupt_to_utt2_post_ms": (t_utt2_post - t0) * 1000.0,
+            "sse_events": client.sse_events,
+            "speak_log": [[t, s] for t, s in client.speak_log],
+        }
+        (out_dir / "meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return meta
+    finally:
+        # LiveTalking removes a session only when ICE closes; one leaked
+        # aiortc PC per failed attempt fills max_session (5) and every later
+        # offer is rejected with "Maximum session limit reached (5/5)".
+        await client.stop_speak_poll()
+        try:
+            await pc.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def run_reference(
@@ -311,42 +317,63 @@ async def run_reference(
     utt1_path = wav_dir / f"utt1_seed{seed}.wav"
     client = LTClient(base, avatar)
     pc = RTCPeerConnection()
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as http:
-        await client.connect(http, pc)
-        await asyncio.sleep(0.3)
-        await client.record("start_record")
-        t_before = time.perf_counter()
-        await client.send_audio(utt1_path)
-        utt1_start = await client.wait_event("start", t_before, timeout=10.0)
-        if utt1_start is None:
-            raise RuntimeError("no SSE start event (reference)")
-        await asyncio.sleep(_UTT_S + 1.5)  # full utterance + tail margin
-        await client.record("end_record")
-        await asyncio.sleep(0.5)
-        mp4_path = out_dir / "recording.mp4"
-        await client.fetch_recording(mp4_path)
-    meta = {
-        "kind": "reference",
-        "system": "livetalking",
-        "protocol": "lt_design_b",
-        "sessionid": client.sessionid,
-        "avatar_id": avatar,
-        "seed": seed,
-        "repeat": repeat,
-        "utt1_wav": utt1_path.name,
-        "utt1": {"seed": seed, "duration_s": _UTT_S, "sr": 16000},
-        "perf_clock": {"utt1_start": utt1_start},
-        "sse_events": client.sse_events,
-        "speak_log": [[t, s] for t, s in client.speak_log],
-    }
-    (out_dir / "meta.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
     try:
-        await pc.close()
-    except Exception:  # noqa: BLE001
-        pass
-    return meta
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as http:
+            await client.connect(http, pc)
+            await asyncio.sleep(0.3)
+            await client.record("start_record")
+            t_before = time.perf_counter()
+            await client.send_audio(utt1_path)
+            utt1_start = await client.wait_event("start", t_before, timeout=10.0)
+            if utt1_start is None:
+                raise RuntimeError("no SSE start event (reference)")
+            await asyncio.sleep(_UTT_S + 1.5)  # full utterance + tail margin
+            await client.record("end_record")
+            await asyncio.sleep(0.5)
+            mp4_path = out_dir / "recording.mp4"
+            await client.fetch_recording(mp4_path)
+
+        meta = {
+            "kind": "reference",
+            "system": "livetalking",
+            "protocol": "lt_design_b",
+            "sessionid": client.sessionid,
+            "avatar_id": avatar,
+            "seed": seed,
+            "repeat": repeat,
+            "utt1_wav": utt1_path.name,
+            "utt1": {"seed": seed, "duration_s": _UTT_S, "sr": 16000},
+            "perf_clock": {"utt1_start": utt1_start},
+            "sse_events": client.sse_events,
+            "speak_log": [[t, s] for t, s in client.speak_log],
+        }
+        (out_dir / "meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return meta
+    finally:
+        # Same slot-leak guard as run_session (see comment there).
+        try:
+            await pc.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _with_retries(
+    factory: Callable[[], Awaitable[dict]], label: str, retries: int
+) -> dict:
+    """Run one session, retrying transient failures (SSE start race, offer
+    rejection while the previous session's ICE teardown is still draining)."""
+    last: Exception = RuntimeError("unreachable")
+    for attempt in range(retries + 1):
+        try:
+            return await factory()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if attempt < retries:
+                print(f"[RETRY {attempt + 1}/{retries}] {label}: {exc}", flush=True)
+                await asyncio.sleep(5.0)
+    raise last
 
 
 async def cmd_run(args: argparse.Namespace) -> int:
@@ -361,8 +388,11 @@ async def cmd_run(args: argparse.Namespace) -> int:
         for seed in range(1, args.points + 1):
             out_dir = out_root / f"reference_{avatars[0]}_seed{seed}"
             try:
-                meta = await run_reference(
-                    args.base, avatars[0], seed, 0, wav_dir, out_dir
+                meta = await _with_retries(
+                    lambda: run_reference(
+                        args.base, avatars[0], seed, 0, wav_dir, out_dir
+                    ),
+                    f"ref seed{seed}", args.retries,
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"[FAIL] ref seed{seed}: {exc}")
@@ -379,8 +409,11 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 seed = i + 1
                 out_dir = out_root / f"interrupt_{avatar}_seed{seed}_t{t_int:.2f}s_r{repeat}"
                 try:
-                    meta = await run_session(
-                        args.base, avatar, seed, t_int, repeat, wav_dir, out_dir
+                    meta = await _with_retries(
+                        lambda: run_session(
+                            args.base, avatar, seed, t_int, repeat, wav_dir, out_dir
+                        ),
+                        f"{avatar} seed{seed} r{repeat}", args.retries,
                     )
                 except Exception as exc:  # noqa: BLE001
                     print(f"[FAIL] {avatar} seed{seed} r{repeat}: {exc}")
@@ -434,6 +467,8 @@ def main() -> int:
     p.add_argument("--wav-dir", default="data/interruption_eval/lt_wavs")
     p.add_argument("--out-root", required=True)
     p.add_argument("--session-gap", type=float, default=1.0)
+    p.add_argument("--retries", type=int, default=2,
+                   help="retries per session after a transient failure")
     p.set_defaults(fn=cmd_run)
 
     args = ap.parse_args()
