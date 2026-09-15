@@ -12,6 +12,7 @@ dist/
 /weights/
 /avatars/
 /data/
+/docs/
 /logs/
 /*.log
 *.db
