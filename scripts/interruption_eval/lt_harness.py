@@ -408,6 +408,16 @@ async def _with_retries(
     raise last
 
 
+def _parse_range(spec: str | None, total: int) -> range:
+    """Parse "A:B" (0-based, half-open) into a range bounded by total."""
+    if not spec:
+        return range(total)
+    a, _, b = spec.partition(":")
+    start = int(a) if a else 0
+    stop = int(b) if b else total
+    return range(max(0, start), min(total, stop))
+
+
 async def cmd_run(args: argparse.Namespace) -> int:
     wav_dir = Path(args.wav_dir)
     out_root = Path(args.out_root)
@@ -417,7 +427,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if args.references:
         # Uninterrupted reference sessions (V-APT baseline curves), one per
         # seed on the first avatar — mirrors record.py's convention.
+        ref_idx = _parse_range(args.ref_range, args.points)
         for seed in range(1, args.points + 1):
+            if (seed - 1) not in ref_idx:
+                continue
             out_dir = out_root / f"reference_{avatars[0]}_seed{seed}"
             try:
                 meta = await _with_retries(
@@ -435,9 +448,15 @@ async def cmd_run(args: argparse.Namespace) -> int:
             rows.append(meta)
             print(f"[ref {seed}/{args.points}]", flush=True)
             await asyncio.sleep(args.session_gap)
+    sess_idx = _parse_range(
+        getattr(args, "sess_range", None), args.points * args.repeats
+    )
     for avatar in avatars:
         for repeat in range(1, args.repeats + 1):
             for i, t_int in enumerate(grid):
+                gi = (repeat - 1) * args.points + i
+                if gi not in sess_idx:
+                    continue
                 seed = i + 1
                 out_dir = out_root / f"interrupt_{avatar}_seed{seed}_t{t_int:.2f}s_r{repeat}"
                 try:
@@ -461,7 +480,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
                 await asyncio.sleep(args.session_gap)
-    (out_root / "record_index.json").write_text(
+    (out_root / getattr(args, "index_name", "record_index.json")).write_text(
         json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     fails = sum(1 for r in rows if r.get("error"))
@@ -501,6 +520,15 @@ def main() -> int:
     p.add_argument("--session-gap", type=float, default=1.0)
     p.add_argument("--retries", type=int, default=2,
                    help="retries per session after a transient failure")
+    p.add_argument("--ref-range", default=None,
+                   help='reference index range "A:B" (0-based, half-open) '
+                        "for batched runs with server restarts between batches")
+    p.add_argument("--sess-range", default=None,
+                   help="interrupt-session global index range A:B, index = "
+                        "(repeat-1)*points + point_idx")
+    p.add_argument("--index-name", default="record_index.json",
+                   help="output index file name (unique per batch when "
+                        "splitting the matrix across server restarts)")
     p.set_defaults(fn=cmd_run)
 
     args = ap.parse_args()
