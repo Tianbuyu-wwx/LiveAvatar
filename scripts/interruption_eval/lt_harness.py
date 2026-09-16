@@ -38,11 +38,6 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
-try:  # aiortc only exists in the LiveTalking venv
-    from aiortc.mediastreams import MediaStreamError
-except ImportError:  # pragma: no cover - prepare-only environments
-    MediaStreamError = ConnectionError  # type: ignore[assignment,misc]
-
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
@@ -51,7 +46,9 @@ from audio_synth import Utterance, synth_utterance  # noqa: E402
 
 _UTT_S = 6.0
 _UTT2_S = 2.5  # post-interrupt response duration (mirrors record.py)
-_POLL_HZ = 40.0
+_POLL_HZ = 2.0  # 2 Hz: 40 Hz is_speaking polling competes with the render
+# loop for the GIL and degrades SSE event latency; the speak_log is
+# metadata-only (lt_extract never reads it).
 
 
 def write_wav(path: Path, utt: Utterance) -> None:
@@ -117,15 +114,20 @@ class LTClient:
         @pc.on("track")
         def on_track(track: Any) -> None:
             async def _drain() -> None:
+                # MUST keep draining until the pc itself closes: if this loop
+                # exits early (one decode error), the server's video track
+                # queue backs up and its render thread throttles
+                # (sleep(0.04*qsize*0.8)) to a crawl — zero frames produced,
+                # SSE eventpoints never fire, the session deadlocks.
                 while True:
                     try:
                         await track.recv()
-                    except (MediaStreamError, ConnectionError, OSError):
-                        return
                     except asyncio.CancelledError:
                         raise
-                    except Exception:  # noqa: BLE001
-                        return
+                    except Exception as exc:  # noqa: BLE001
+                        self.sse_events.append(
+                            {"_ts": time.perf_counter(), "_recv_error": repr(exc)})
+                        await asyncio.sleep(0.05)
 
             self._recv_tasks.append(asyncio.create_task(_drain()))
 
@@ -252,7 +254,7 @@ class LTClient:
 
 async def run_session(
     base: str, avatar: str, seed: int, interrupt_at: float, repeat: int,
-    wav_dir: Path, out_dir: Path, *, poll_speak: bool = True,
+    wav_dir: Path, out_dir: Path, *, poll_speak: bool = False,
 ) -> dict:
     from aiortc import RTCPeerConnection
 
@@ -286,6 +288,13 @@ async def run_session(
             t_utt2_post = time.perf_counter()
 
             utt2_start = await client.wait_event("start", t_utt2_post, timeout=15.0)
+            if utt2_start is None:
+                # Server never began utt2 playback: a degraded session (the
+                # ~5-session thread-leak starves the SSE pipeline). Treat as
+                # a transient failure so retries re-run it and NO meta.json
+                # is written (a written meta would make later batches skip
+                # the broken session forever).
+                raise RuntimeError("no SSE start event for utterance 2")
             utt2_end = await client.wait_event("end", t_utt2_post, timeout=30.0)
             await asyncio.sleep(0.8)  # tail margin (last frames drain)
 
@@ -329,6 +338,24 @@ async def run_session(
         # aiortc PC per failed attempt fills max_session (5) and every later
         # offer is rejected with "Maximum session limit reached (5/5)".
         await client.stop_speak_poll()
+        # Best-effort end_record via a fresh HTTP session: a session that
+        # raised (e.g. no SSE utt2 start) leaves the server-side ffmpeg
+        # recording pipes open; their stdin back-pressures the render thread
+        # and starves every later session in the batch. Double-stop on the
+        # success path is a server-side no-op (stop_recording early-returns).
+        try:
+            if client.sessionid:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as http2:
+                    async with http2.post(
+                        f"{client.base}/record",
+                        json={"sessionid": client.sessionid,
+                              "type": "end_record"},
+                    ) as resp:
+                        await resp.read()
+        except Exception:  # noqa: BLE001
+            pass
         for task in getattr(client, "_recv_tasks", []):
             task.cancel()
         try:
@@ -373,7 +400,13 @@ async def run_reference(
             "repeat": repeat,
             "utt1_wav": utt1_path.name,
             "utt1": {"seed": seed, "duration_s": _UTT_S, "sr": 16000},
-            "perf_clock": {"utt1_start": utt1_start},
+            # push-to-playback latency: healthy server 2-4s (connect+ICE+
+            # first-chunk inference); 10-20s means the GPU is contended and
+            # the UNET forward crawls (py-spy 2026-09-16: inference pinned in
+            # UNET, render blocked at whisper.feat_queue.put). The matrix
+            # chain gates server readiness on this number.
+            "utt1_start_latency_ms": (utt1_start - t_before) * 1000.0,
+            "perf_clock": {"utt1_start": utt1_start, "utt1_post": t_before},
             "sse_events": client.sse_events,
             "speak_log": [[t, s] for t, s in client.speak_log],
         }
@@ -382,7 +415,21 @@ async def run_reference(
         )
         return meta
     finally:
-        # Same slot-leak guard as run_session (see comment there).
+        # Same leak guards as run_session (see comment there): end_record so
+        # the server-side ffmpeg pipes close even when this session raised.
+        try:
+            if client.sessionid:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as http2:
+                    async with http2.post(
+                        f"{client.base}/record",
+                        json={"sessionid": client.sessionid,
+                              "type": "end_record"},
+                    ) as resp:
+                        await resp.read()
+        except Exception:  # noqa: BLE001
+            pass
         for task in getattr(client, "_recv_tasks", []):
             task.cancel()
         try:
@@ -432,6 +479,11 @@ async def cmd_run(args: argparse.Namespace) -> int:
             if (seed - 1) not in ref_idx:
                 continue
             out_dir = out_root / f"reference_{avatars[0]}_seed{seed}"
+            if (out_dir / "meta.json").is_file():
+                # meta.json is written after the mp4 download: its presence
+                # marks a complete session, so batched restarts can resume.
+                print(f"[skip] ref seed{seed}: already recorded", flush=True)
+                continue
             try:
                 meta = await _with_retries(
                     lambda: run_reference(
@@ -459,6 +511,12 @@ async def cmd_run(args: argparse.Namespace) -> int:
                     continue
                 seed = i + 1
                 out_dir = out_root / f"interrupt_{avatar}_seed{seed}_t{t_int:.2f}s_r{repeat}"
+                if (out_dir / "meta.json").is_file():
+                    print(
+                        f"[skip] {avatar} seed{seed} r{repeat}: already recorded",
+                        flush=True,
+                    )
+                    continue
                 try:
                     meta = await _with_retries(
                         lambda: run_session(
