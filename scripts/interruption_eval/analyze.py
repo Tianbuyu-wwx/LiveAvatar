@@ -79,12 +79,18 @@ _CAL: tuple[float, float] | None = None  # (raw_closed, raw_open)
 
 
 def _raw_cavity_fraction(bgr: np.ndarray) -> float:
-    """Dark-pixel (mouth cavity) area fraction inside the mouth ROI."""
+    """Dark-pixel (mouth cavity) area fraction inside the mouth ROI.
+
+    ROI geometry is defined on the canonical 256x256 proxy canvas
+    (``mouth_proxy._WIDTH``) and scaled with the frame size — the P-E2b
+    real-GPU recordings are 512x512, where the unscaled ROI sampled the
+    nose/cheek skin and the cavity fraction degenerated to ~0."""
     h, w = bgr.shape[:2]
+    s = w / 256.0
     cx = w // 2
-    cy = h // 2 + _MOUTH_CY_OFF
-    x0, x1 = max(cx - _ROI_DX, 0), min(cx + _ROI_DX, w)
-    y0, y1 = max(cy - _ROI_DY, 0), min(cy + _ROI_DY, h)
+    cy = int(h // 2 + _MOUTH_CY_OFF * s)
+    x0, x1 = int(max(cx - _ROI_DX * s, 0)), int(min(cx + _ROI_DX * s, w))
+    y0, y1 = int(max(cy - _ROI_DY * s, 0)), int(min(cy + _ROI_DY * s, h))
     roi = bgr[y0:y1, x0:x1]
     return float((roi.max(axis=2) < _DARK_V).mean())
 
@@ -136,12 +142,26 @@ def load_series(session_dir: str) -> dict[str, Any]:
     ts = np.array([f["ts_rel"] for f in timeline], dtype=np.float64)
     epochs = np.array([f["epoch"] for f in timeline], dtype=np.int64)
     boundary = np.array([f["boundary"] for f in timeline], dtype=bool)
-    op = np.empty(len(timeline), dtype=np.float64)
-    for i, f in enumerate(timeline):
-        path = os.path.join(session_dir, "frames", f["file"])
-        # cv2.imread fails on non-ASCII Windows paths — decode from bytes.
-        img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
-        op[i] = extract_openness(img)
+    imgs = [
+        cv2.imdecode(np.fromfile(os.path.join(session_dir, "frames", f["file"]),
+                                 dtype=np.uint8), cv2.IMREAD_COLOR)
+        for f in timeline
+    ]
+    if imgs and imgs[0].shape[1] > 256:
+        # Rendered avatars (P-E2b real-GPU, 512x512): the fixed proxy ROI
+        # does not transfer (different face geometry/palette). Use the SAME
+        # YuNet + geometric mouth ROI + p2/p99 self-calibration extractor as
+        # the LiveTalking arm (lt_extract) — symmetric measurement across
+        # systems on rendered faces.
+        from lt_extract import openness_series as _rendered_openness
+
+        # dark_v=150: rendered avatars paint much brighter mouths than
+        # MuseTalk's real-face recordings — at the default 90 the sun
+        # avatar's cavity fraction is all-zero (threshold sweep in the
+        # pe5_main 口径说明).
+        op = _rendered_openness(imgs, dark_v=150.0)
+    else:
+        op = np.array([extract_openness(img) for img in imgs])
 
     period = float(meta.get("frame_period_s") or 0.04)
     n_trans = int(meta.get("transition_frames") or 0)

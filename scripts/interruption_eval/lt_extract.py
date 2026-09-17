@@ -56,7 +56,22 @@ from metrics import (  # noqa: E402
 _SR = 16000
 _ENERGY_THR = 300.0  # s16 amplitude threshold for "audible" samples
 _FRAME_FPS = 25.0
+_VAPT_WINDOW_S = 1.2  # transition-window 口径, mirrors analyze.py (P-B7 gate)
 _YUNET = Path(__file__).resolve().parents[2] / "models" / "face_detection_yunet_2023mar.onnx"
+
+
+def _zoh_grid(u: np.ndarray, values: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    """Zero-order hold (same semantics as analyze._zoh_grid): grid[i] holds
+    the latest sample ≤ grid[i]; before the first sample hold values[0]."""
+    idx = np.searchsorted(u, grid, side="right") - 1
+    out = np.empty_like(grid)
+    if len(u):
+        ok = idx >= 0
+        out[~ok] = values[0]
+        out[ok] = values[idx[ok]]
+    else:  # pragma: no cover - caller guards empty series
+        out[:] = 0.0
+    return out
 
 
 def _yunet_ascii_path() -> str:
@@ -142,12 +157,19 @@ def _mouth_roi(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
 
 
 def openness_series(
-    frames: list[np.ndarray], box: tuple[int, int, int, int] | None = None
+    frames: list[np.ndarray],
+    box: tuple[int, int, int, int] | None = None,
+    dark_v: float = 90.0,
 ) -> np.ndarray:
     """Per-frame mouth openness via dark-cavity fraction + self-calibration.
 
     ``box`` overrides the YuNet mid-frame face detection (used by tests to
-    inject a synthetic geometry).
+    inject a synthetic geometry). ``dark_v`` is the cavity brightness
+    threshold: MuseTalk's real-face recordings have genuinely dark oral
+    cavities (90 works), while the 512x512 rendered avatars (P-E2b) render
+    far brighter mouths — 150 keeps their p2→p99 dynamic range alive (the
+    sun avatar at 90 degenerates to an all-zero series; documented in the
+    pe5_main 口径说明).
     """
     if not frames:
         return np.zeros(0)
@@ -157,7 +179,7 @@ def openness_series(
         raise RuntimeError("no face detected in mid frame")
     x0, y0, x1, y1 = _mouth_roi(box)
     raw = np.array([
-        float((f[y0:y1, x0:x1].max(axis=2) < 90.0).mean()) for f in frames
+        float((f[y0:y1, x0:x1].max(axis=2) < dark_v).mean()) for f in frames
     ])
     lo, hi = np.percentile(raw, 2), np.percentile(raw, 99)
     if hi - lo < 1e-4:
@@ -255,16 +277,21 @@ def analyze_lt_session(session_dir: str, wav_dir: str) -> dict[str, Any]:
         ref_frames = read_frames(ref_dir / "recording.mp4")
         ref_op = openness_series(ref_frames)
         ref_a1 = xcorr_anchor(ref_pcm, _pcm_float(utt1))
-        # align both series on the utterance-1 anchor (utterance clock)
+        # align both series on the utterance-1 anchor (utterance clock),
+        # zero-order hold — the browser keeps showing the last rendered
+        # frame, so ZOH is the honest resampling (mirrors analyze.py)
         grid = np.arange(0.0, 6.0, 1.0 / _FRAME_FPS)
         obs_u = frame_ts - a1 / _SR
         ref_u = np.arange(len(ref_op)) / _FRAME_FPS - ref_a1 / _SR
-        ref_on_grid = np.interp(grid, ref_u, ref_op, left=0.0, right=0.0)
-        obs_on_grid = np.interp(grid, obs_u, op, left=0.0, right=0.0)
+        ref_on_grid = _zoh_grid(ref_u, ref_op, grid)
+        obs_on_grid = _zoh_grid(obs_u, op, grid)
         cut_u = t_int_rec - a1 / _SR if t_int_rec is not None else 0.0
-        cut_g = int(cut_u * _FRAME_FPS)
+        cut_g = int(round(cut_u * _FRAME_FPS))
         if 0 < cut_g < len(grid):
-            va = v_apt(obs_on_grid, ref_on_grid, cut_g, 1000.0 / _FRAME_FPS)
+            va = v_apt(
+                obs_on_grid, ref_on_grid, cut_g, 1000.0 / _FRAME_FPS,
+                max_span=int(np.ceil(_VAPT_WINDOW_S * _FRAME_FPS)),
+            )
             row["v_apt_ms"] = round(va.apt_ms, 2)
             row["v_apt_recover_s"] = (
                 round(grid[va.recover_idx], 3) if va.recover_idx is not None else None
