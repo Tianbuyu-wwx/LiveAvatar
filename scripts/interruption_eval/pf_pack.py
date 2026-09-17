@@ -220,7 +220,7 @@ def build_lt_clip(session: Path, out_mp4: Path) -> None:
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y",
          "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(session / "recording.mp4"),
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+         "-c:v", "libx264", "-preset", "medium", "-crf", "16",
          "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart",
          str(tmp)],
         check=True,

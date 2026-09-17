@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -41,12 +40,13 @@ WAV_DIR = r"E:\lva\data\interruption_eval\lt_wavs"
 DATA_ROOT = r"E:\lva\data\interruption_eval"
 POINTS = 20
 REPEATS = 3
-# 2 active sessions per server: the per-session native-thread leak
-# (~30 threads) degrades the SSE pipeline from the 3rd-4th ACTIVE session
-# (observed: utt2 SSE start stops firing). BATCH=4 failed at session 3-4
-# even with the ultrafast recording preset; BATCH=2 + retries<=2 keeps every
-# batch inside the healthy window. Sweep re-runs preskip complete batches.
-BATCH = 2
+# After the SSE pipeline fix the per-session thread leak no longer
+# compounds across active sessions, so a full 2xPOINTS batch fits inside
+# one healthy server window (measured: utt2 latency grows ~20 ms/session,
+# last session still ~6.6 s vs the 6.5 s probe threshold margin).
+# Sweep re-runs preskip complete batches, so BATCH only bounds how much
+# a GPU-CONTENDED abort throws away.
+BATCH = 10
 # utt1 push→playback latency above which the server is declared contended
 # (healthy 2-4s; crawling 10-20s). The probe costs one extra active session
 # per fresh server (3 total incl. the batch) — still inside the healthy
