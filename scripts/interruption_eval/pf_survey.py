@@ -59,7 +59,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.08);
           max-width: 640px; width: 100%; margin: 24px; padding: 24px 28px; }
   h1 { font-size: 20px; } h2 { font-size: 17px; }
-  video { width: 100%; max-width: 480px; display: block; margin: 12px auto;
+  video { width: 100%; max-width: 560px; display: block; margin: 12px auto;
           border-radius: 8px; background: #000; }
   .scale { display: flex; gap: 8px; margin: 6px 0 14px; }
   .scale button { flex: 1; padding: 10px 0; font-size: 15px; border: 1.5px solid #bbb;

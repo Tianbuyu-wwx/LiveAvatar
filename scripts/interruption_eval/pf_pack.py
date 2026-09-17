@@ -14,8 +14,9 @@ All clips use the yongen avatar, repeat 1.
 Clip construction:
 - self arms (pe_real): the FULL session is rebuilt from the frame timeline
   via report.py's grid expansion (freeze gaps hold the last frame — what
-  the viewer's screen actually shows) with arrival-aligned audio; identical
-  to the P-B7 blind pipeline, resolution-independent (512x512 fine).
+  the viewer's screen actually shows) with arrival-aligned audio; encoded
+  in ONE H.264 pass from the source JPGs (crf 16), resolution-independent
+  (512x512 legacy or 768x768 HD recuts).
 - LT arm: ffmpeg-cut from ``recording.mp4`` (the actual WebRTC output),
   anchored at the xcorr-derived rec-clock offsets stored in
   ``metrics.json`` (utt1_start_rec / utt2_start_rec).
@@ -41,18 +42,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-import report as rp  # noqa: E402  (reuses _write_clip / _aligned_audio / _mux_av)
+import report as rp  # noqa: E402  (reuses _grid_expand / _aligned_audio / _mux_av)
 
 AVATAR = "yongen"
 REPEAT = 1
@@ -77,9 +82,10 @@ def _t_of(name: str) -> str:
     return rest.removesuffix("s")
 
 
-def self_dirs(data_root: Path, arm: str) -> dict[tuple[int, str], Path]:
-    """pe_real_{arm}_r{REPEAT} yongen interrupt sessions keyed by (seed, t)."""
-    root = data_root / f"pe_real_{arm}_r{REPEAT}"
+def self_dirs(data_root: Path, arm: str,
+              prefix: str = "pe_real") -> dict[tuple[int, str], Path]:
+    """{prefix}_{arm}_r{REPEAT} yongen interrupt sessions keyed by (seed, t)."""
+    root = data_root / f"{prefix}_{arm}_r{REPEAT}"
     out: dict[tuple[int, str], Path] = {}
     for d in sorted(root.glob(f"interrupt_{AVATAR}_seed*_t*")):
         body = d.name.removeprefix(f"interrupt_{AVATAR}_seed")
@@ -128,18 +134,59 @@ def pick_slots(candidates: dict[tuple[int, str], Path]) -> list[dict[str, Any]]:
     return picks
 
 
-def _to_h264(mp4: Path) -> None:
-    """cv2's mp4v codec is MPEG-4 Part 2 — unplayable in <video>; the
-    survey page needs H.264 (LT cuts are already libx264)."""
-    tmp = mp4.with_suffix(".tmp264.mp4")
-    subprocess.run(
-        ["ffmpeg", "-v", "error", "-y", "-i", str(mp4),
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-         "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
-         str(tmp)],
-        check=True,
+def _write_clip_h264(src_dir: str, mp4_path: str, timeline: list[dict],
+                     fps: float, period_s: float) -> bool:
+    """Encode the grid-expanded JPEG frames straight to H.264 (crf 16) via
+    an ffmpeg rawvideo pipe. The old path (cv2 mp4v → libx264 recode) lost
+    detail twice: cv2's default mp4v bitrate is ~0.65 Mbps and the second
+    transcode compounds it — the P-E 512x512 clips came out visibly muddy.
+    One encode from the source JPGs keeps the 768x768 HD recuts sharp."""
+    import cv2
+
+    if not timeline:
+        return False
+    first = cv2.imdecode(
+        np.fromfile(os.path.join(src_dir, "frames", timeline[0]["file"]),
+                    np.uint8),
+        cv2.IMREAD_COLOR,
     )
-    shutil.move(tmp, mp4)
+    if first is None:
+        return False
+    h, w = first.shape[:2]
+    grid = rp._grid_expand(timeline, period_s)
+    fd, tmp = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    cmd = [
+        "ffmpeg", "-v", "error", "-y",
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-s", f"{w}x{h}", "-r", f"{fps}", "-i", "-",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "16",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp,
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    ok = proc.stdin is not None
+    try:
+        if ok:
+            for fr in grid:
+                img = cv2.imdecode(
+                    np.fromfile(os.path.join(src_dir, "frames", fr["file"]),
+                                np.uint8),
+                    cv2.IMREAD_COLOR,
+                )
+                if img is None:
+                    ok = False
+                    break
+                proc.stdin.write(img.tobytes())
+    finally:
+        if proc.stdin is not None:
+            proc.stdin.close()
+        code = proc.wait()
+    if ok and code == 0:
+        shutil.move(tmp, mp4_path)
+        return True
+    if os.path.isfile(tmp):
+        os.unlink(tmp)
+    return False
 
 
 def build_self_clip(session: Path, out_mp4: Path) -> None:
@@ -148,8 +195,8 @@ def build_self_clip(session: Path, out_mp4: Path) -> None:
     timeline = meta.get("frame_timeline") or []
     period = float(meta.get("frame_period_s") or 0.04)
     t0 = float(timeline[0]["ts_rel"]) if timeline else 0.0
-    if not rp._write_clip(str(session), str(out_mp4), timeline,
-                          1.0 / period, period):
+    if not _write_clip_h264(str(session), str(out_mp4), timeline,
+                            1.0 / period, period):
         raise SystemExit(f"clip encode failed: {session}")
     wav = out_mp4.with_suffix(".tmp.wav")
     try:
@@ -158,7 +205,6 @@ def build_self_clip(session: Path, out_mp4: Path) -> None:
             raise SystemExit(f"mux failed: {session}")
     finally:
         wav.unlink(missing_ok=True)
-    _to_h264(out_mp4)
 
 
 def build_lt_clip(session: Path, out_mp4: Path) -> None:
@@ -194,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--data-root", default="data/interruption_eval")
     ap.add_argument("--out", default="data/interruption_eval/pf_pack")
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--self-prefix", default="pe_real",
+                    help="self-arm dataset prefix (pe_real_hd = the "
+                         "768x768 HD recuts)")
     ap.add_argument("--skip-existing", action="store_true",
                     help="reuse existing clip files (idempotent re-runs)")
     args = ap.parse_args(argv)
@@ -203,8 +252,8 @@ def main(argv: list[str] | None = None) -> int:
     clips_dir = out_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
 
-    arms = {"hard": self_dirs(data_root, "hard"),
-            "trans": self_dirs(data_root, "trans"),
+    arms = {"hard": self_dirs(data_root, "hard", args.self_prefix),
+            "trans": self_dirs(data_root, "trans", args.self_prefix),
             "lt": lt_dirs(data_root)}
     common = set(arms["hard"]) & set(arms["trans"]) & set(arms["lt"])
     if len(common) < len(SLOTS):

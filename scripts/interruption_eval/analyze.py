@@ -120,7 +120,7 @@ def extract_openness(bgr: np.ndarray) -> float:
 # ─────────────────────────────────────────────────────── session loading
 
 
-def load_series(session_dir: str) -> dict[str, Any]:
+def load_series(session_dir: str, dark_v: float | None = None) -> dict[str, Any]:
     """meta.json + per-frame (ts_rel, epoch, u, openness) arrays.
 
     ``u`` is the utterance-1 wall clock (seconds since utterance 1
@@ -155,11 +155,15 @@ def load_series(session_dir: str) -> dict[str, Any]:
         # systems on rendered faces.
         from lt_extract import openness_series as _rendered_openness
 
-        # dark_v=150: rendered avatars paint much brighter mouths than
-        # MuseTalk's real-face recordings — at the default 90 the sun
-        # avatar's cavity fraction is all-zero (threshold sweep in the
-        # pe5_main 口径说明).
-        op = _rendered_openness(imgs, dark_v=150.0)
+        # dark_v: cavity brightness threshold. Historical default 150 for
+        # the 512x512 P-E2b renders — downscale + JPEG mixing brightens the
+        # cavity, dark<90 would be all-zero (threshold sweep in the
+        # pe5_main 口径说明). The 768x768 HD recuts keep the material's
+        # native resolution, so pass dark_v=90.0 (the same 口径 as the
+        # LiveTalking arm) after verifying the sweep on a smoke session.
+        if dark_v is None:
+            dark_v = 150.0
+        op = _rendered_openness(imgs, dark_v=dark_v)
     else:
         op = np.array([extract_openness(img) for img in imgs])
 
@@ -218,9 +222,10 @@ def analyze_session(
     *,
     delta_s: float = 0.6,
     vapt_window_s: float = 1.2,
+    dark_v: float | None = None,
 ) -> dict:
     """Compute paper metrics for one recorded session; write metrics.json."""
-    s = load_series(session_dir)
+    s = load_series(session_dir, dark_v=dark_v)
     meta = s["meta"]
     out: dict[str, Any] = {
         "kind": meta.get("kind"),
@@ -395,10 +400,16 @@ def main(argv: list[str] | None = None) -> int:
                         default="data/interruption_eval/dataset")
     parser.add_argument("--delta-s", type=float, default=0.6)
     parser.add_argument("--vapt-window-s", type=float, default=1.2)
+    parser.add_argument("--mouth-dark-v", type=float, default=None,
+                        help="cavity brightness threshold for >256px "
+                             "material-face frames (default 150 = the "
+                             "512x512 P-E2b 口径; pass 90 for the "
+                             "768x768 HD recuts)")
     args = parser.parse_args(argv)
 
     rows = analyze_all(
-        args.data, delta_s=args.delta_s, vapt_window_s=args.vapt_window_s
+        args.data, delta_s=args.delta_s, vapt_window_s=args.vapt_window_s,
+        dark_v=args.mouth_dark_v,
     )
     bad = [r for r in rows if r.get("error")]
     print(f"analyzed {len(rows)} sessions ({len(bad)} errors)")

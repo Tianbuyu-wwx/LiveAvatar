@@ -174,9 +174,19 @@ def openness_series(
     if not frames:
         return np.zeros(0)
     if box is None:
-        box = _face_box(frames[len(frames) // 2])
+        n = len(frames)
+        mid = n // 2
+        # Transition first-frames can be blurry enough for YuNet to miss;
+        # retry outwards from the mid frame before giving up.
+        offsets = [0] + [s * ((k + 1) // 2)
+                         for k in range(1, n) for s in (1, -1)][: n - 1]
+        for off in offsets:
+            idx = min(max(mid + off, 0), n - 1)
+            box = _face_box(frames[idx])
+            if box is not None:
+                break
     if box is None:
-        raise RuntimeError("no face detected in mid frame")
+        raise RuntimeError("no face detected in any frame")
     x0, y0, x1, y1 = _mouth_roi(box)
     raw = np.array([
         float((f[y0:y1, x0:x1].max(axis=2) < dark_v).mean()) for f in frames

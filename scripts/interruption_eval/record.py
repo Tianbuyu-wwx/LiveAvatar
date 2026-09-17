@@ -255,6 +255,7 @@ def _start_server(
     transition_frames: int = 3,
     real: bool = False,
     avatar_data_root: str = "data/avatars_real",
+    frame_size: int = 512,
 ) -> tuple[uvicorn.Server, threading.Thread, int]:
     state.settings = PublishSettings()
     state.settings.codec = "mjpeg"
@@ -272,6 +273,8 @@ def _start_server(
             avatar_data_root=str(repo / avatar_data_root),
             device="cuda",
             is_half=True,
+            width=frame_size,
+            height=frame_size,
             max_workers=max(1, len(avatars)),
             whisper_model_path=str(repo / "models" / "whisper"),
             musetalk_model_dir=str(repo / "models" / "musetalkV15"),
@@ -665,6 +668,11 @@ async def main_async(argv: list[str] | None = None) -> int:
                         help="comma-separated avatar ids for --real")
     parser.add_argument("--avatar-data-root", default="data/avatars_real",
                         help="avatar data root for --real")
+    parser.add_argument("--frame-size", type=int, default=512,
+                        help="output canvas edge for --real. 768 = the "
+                             "avatar material's native resolution, which "
+                             "makes MuseTalkWorker._resize_to_target a "
+                             "no-op (zero-rescale HD recuts)")
     parser.add_argument("--smoke", action="store_true",
                         help="tiny grid: 2 avatars x 2 points, 2 seeds")
     args = parser.parse_args(argv)
@@ -685,6 +693,7 @@ async def main_async(argv: list[str] | None = None) -> int:
         transition_frames=args.transition,
         real=args.real,
         avatar_data_root=args.avatar_data_root,
+        frame_size=args.frame_size,
     )
     base = f"http://{_HOST}:{port}"
     ws_base = f"ws://{_HOST}:{port}"

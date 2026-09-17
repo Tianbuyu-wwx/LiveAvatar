@@ -41,8 +41,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 from scipy import stats
@@ -97,11 +98,12 @@ def load_arm_rows(data_root: Path) -> dict[tuple, dict]:
     return rows
 
 
-def load_self_rows(data_root: Path, arm: str) -> dict[tuple, dict]:
-    """pe_real_{arm}_r{k} rows keyed by (avatar, seed, t_str, repeat)."""
+def load_self_rows(data_root: Path, arm: str,
+                   prefix: str = "pe_real") -> dict[tuple, dict]:
+    """{prefix}_{arm}_r{k} rows keyed by (avatar, seed, t_str, repeat)."""
     rows: dict[tuple, dict] = {}
     for k in REPEATS:
-        root = data_root / f"pe_real_{arm}_r{k}"
+        root = data_root / f"{prefix}_{arm}_r{k}"
         for d in sorted(root.glob("interrupt_*_seed*")):
             body = d.name.removeprefix("interrupt_")  # {avatar}_seed{S}_t{T}s
             avatar, rest = body.split("_seed", 1)
@@ -185,7 +187,7 @@ def wilcoxon_family(
         per_metric[key] = row
         pvals.append(row["p"])
     adj = holm(pvals)
-    for (key, _l, _s, _t), a in zip(METRICS, adj):
+    for (key, _l, _s, _t), a in zip(METRICS, adj, strict=False):
         per_metric[key]["p_holm"] = a
         per_metric[key]["significant_0.05"] = bool(a < 0.05)
     out.update(per_metric)
@@ -204,6 +206,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data-root", default="data/interruption_eval")
     ap.add_argument("--out", default="data/interruption_eval/pe5_main")
+    ap.add_argument("--self-prefix", default="pe_real",
+                    help="self-arm dataset prefix (pe_real_hd = the 768x768 "
+                         "HD recuts)")
     args = ap.parse_args(argv)
 
     data_root = Path(args.data_root)
@@ -212,8 +217,8 @@ def main(argv: list[str] | None = None) -> int:
 
     lt_rows = load_arm_rows(data_root)
     arms = {
-        "hard": load_self_rows(data_root, "hard"),
-        "trans": load_self_rows(data_root, "trans"),
+        "hard": load_self_rows(data_root, "hard", args.self_prefix),
+        "trans": load_self_rows(data_root, "trans", args.self_prefix),
     }
     print(f"LT rows: {len(lt_rows)}; self hard: {len(arms['hard'])}; "
           f"self trans: {len(arms['trans'])}")
@@ -304,11 +309,11 @@ def main(argv: list[str] | None = None) -> int:
                  "数\"统计的是发布批次而非墙钟时间；LiveTalking 为匀速 25 fps"
                  "录制。二者是录制节奏伪影，不反映系统行为差异。")
     lines.append("- 开口度提取器两侧同源（YuNet 人脸框 + 几何嘴部 ROI + "
-                 "暗腔占比 + 会话内 p2/p99 自校准），但暗腔亮度阈值不同："
-                 "LT 臂（MuseTalk 真人脸录制）用 dark<90，自研渲染 avatar"
-                 "（512×512）用 dark<150——渲染 avatar 口腔亮度远高于真人"
-                 "录制，dark<90 下 sun 的腔体占比全零（阈值扫描见会话诊断），"
-                 "150 对 yongen/sun 均保有完整 p2→p99 动态范围。")
+                 "暗腔占比 + 会话内 p2/p99 自校准），暗腔亮度阈值两侧一致"
+                 "（dark<90）：自研 pe_real_hd 数据集以素材原生 768×768 "
+                 "canvas 录制（无缩放损失），暗腔亮度与真人录制同分布；"
+                 "旧的 512×512 canvas 数据集因缩放混色需 dark<150（阈值"
+                 "扫描见会话诊断），现已废弃出主表。")
     lines.append("- pe_real 数据集仅录制 yongen 的 20 条无打断参考会话；"
                  "sun 打断会话复用同 seed 的 yongen 参考作为 V-APT 基线。"
                  "两侧由同一确定性音频驱动、开口度目标调度与 avatar 无关，"
@@ -321,18 +326,20 @@ def main(argv: list[str] | None = None) -> int:
     lines.append("")
     lines.append("| 指标 | avatar | hard | trans | LT |")
     lines.append("|---|---|---|---|---|")
-    for key, label, self_get, lt_get in METRICS:
+    def _med(vals: list) -> float:
+        return float(np.median(
+            [v for v in vals if v is not None and np.isfinite(v)]))
+
+    for _key, label, self_get, lt_get in METRICS:
         for avatar in AVATARS:
             hk = [k for k in arms["hard"] if k[0] == avatar]
             tk = [k for k in arms["trans"] if k[0] == avatar]
             lk = [k for k in lt_rows if k[0] == avatar]
-            med = lambda vals: float(np.median(
-                [v for v in vals if v is not None and np.isfinite(v)]))
             lines.append(
                 f"| {label} | {avatar} "
-                f"| {med([self_get(arms['hard'][k]) for k in hk]):.2f} "
-                f"| {med([self_get(arms['trans'][k]) for k in tk]):.2f} "
-                f"| {med([lt_get(lt_rows[k]) for k in lk]):.2f} |")
+                f"| {_med([self_get(arms['hard'][k]) for k in hk]):.2f} "
+                f"| {_med([self_get(arms['trans'][k]) for k in tk]):.2f} "
+                f"| {_med([lt_get(lt_rows[k]) for k in lk]):.2f} |")
     lines.append("")
 
     report["descriptives"] = desc
