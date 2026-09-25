@@ -23,8 +23,6 @@ the drain instead of hanging the suite.
 
 from __future__ import annotations
 
-import queue
-import threading
 import time
 import unittest
 
@@ -36,44 +34,8 @@ from liveavatar.video_protocol import (
     has_flag,
     unpack_video_frame,
 )
+from tests.conftest import RECV_TIMEOUT, receive_with_timeout, recv_frames
 from tests.test_video_ws import _PCM_CHUNK, _configure_ws_transport_mode
-
-_RECV_TIMEOUT = 5.0
-
-
-def _receive_with_timeout(video, timeout: float = _RECV_TIMEOUT):
-    q: queue.Queue = queue.Queue()
-
-    def _worker() -> None:
-        try:
-            q.put(video.receive())
-        except Exception as exc:  # surfaced in the caller thread
-            q.put(exc)
-
-    threading.Thread(target=_worker, daemon=True).start()
-    try:
-        result = q.get(timeout=timeout)
-    except queue.Empty:
-        return None
-    if isinstance(result, Exception):
-        raise result
-    return result
-
-
-def _recv_frames(video, n_max: int) -> list:
-    """Collect binary wire-frame headers until the stream goes idle/EOF."""
-    frames = []
-    for _ in range(n_max):
-        msg = _receive_with_timeout(video)
-        if msg is None:
-            break
-        if msg.get("bytes") is None:
-            continue
-        header, _ = unpack_video_frame(msg["bytes"])
-        if has_flag(header.flags, FLAG_EOF):
-            break
-        frames.append(header)
-    return frames
 
 
 class _ThreeWayBase(unittest.TestCase):
@@ -123,7 +85,7 @@ class TestConcurrentStreams(_ThreeWayBase):
             for sid, video, epoch in zip(
                 self.sids, videos, epochs, strict=True
             ):
-                headers = _recv_frames(video, 12)
+                headers = recv_frames(video, 12)
                 self.assertTrue(headers, f"no frames for {sid}")
                 seqs = [h.seq for h in headers]
                 # Own sink only: starts at 0, strictly increasing (drops are
@@ -168,7 +130,7 @@ class TestBargeinIsolation(_ThreeWayBase):
             for sid, video, idx in zip(
                 self.sids, videos, range(3), strict=True
             ):
-                headers = _recv_frames(video, 12)
+                headers = recv_frames(video, 12)
                 self.assertTrue(headers, f"no frames for {sid}")
                 epochs = [h.epoch for h in headers]
                 if idx == 1:
@@ -210,16 +172,16 @@ class TestCloseIsolation(_ThreeWayBase):
             audio.send_bytes(_PCM_CHUNK)
         # Warm all streams so survivors have an active sink state.
         for video in videos:
-            self.assertTrue(_recv_frames(video, 4))
+            self.assertTrue(recv_frames(video, 4))
 
         # Close session 1.
         resp = self.client.request("DELETE", f"/v1/sessions/{self.sids[1]}")
         self.assertEqual(resp.status_code, 200)
         # Its video WS must reach EOF.
         saw_eof = False
-        deadline = time.monotonic() + _RECV_TIMEOUT
+        deadline = time.monotonic() + RECV_TIMEOUT
         while time.monotonic() < deadline and not saw_eof:
-            msg = _receive_with_timeout(videos[1], 1.0)
+            msg = receive_with_timeout(videos[1], 1.0)
             if msg is None:
                 break
             if msg.get("bytes") is not None:
@@ -232,7 +194,7 @@ class TestCloseIsolation(_ThreeWayBase):
             audio.send_bytes(_PCM_CHUNK)
         try:
             for idx in (0, 2):
-                headers = _recv_frames(videos[idx], 8)
+                headers = recv_frames(videos[idx], 8)
                 self.assertTrue(
                     headers,
                     f"survivor {self.sids[idx]} stopped streaming after "

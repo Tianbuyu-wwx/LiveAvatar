@@ -30,6 +30,7 @@ from liveavatar.video_protocol import (
     unpack_region_payload,
     unpack_video_frame,
 )
+from tests.conftest import recv_frames
 from tests.test_publish import _configure_capture_mode, _FakeServicePool
 
 _PCM_CHUNK = b"\x01\x00" * 320  # 20 ms @16 kHz
@@ -226,51 +227,6 @@ class VideoWsInterruptTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200, resp.text)
         return resp.json()["session_id"]
 
-    def _recv_frames(
-        self, video, n_max: int, per_msg_timeout: float = 5.0
-    ) -> list:
-        """Collect up to n_max binary wire frames.
-
-        ``receive()`` on the TestClient blocks forever, so each message is
-        awaited through a helper thread with a timeout: a stream that goes
-        idle before EOF (server paces with 0.5 s timeouts) simply stops the
-        drain instead of hanging the suite on slow runners.
-        """
-        frames = []
-        for _ in range(n_max):
-            msg = self._receive_with_timeout(video, per_msg_timeout)
-            if msg is None:
-                break  # idle stream, no EOF yet — stop draining
-            if msg.get("bytes") is None:
-                continue
-            header, _ = unpack_video_frame(msg["bytes"])
-            if has_flag(header.flags, FLAG_EOF):
-                break
-            frames.append(header)
-        return frames
-
-    @staticmethod
-    def _receive_with_timeout(video, timeout: float):
-        import queue
-        import threading
-
-        q: queue.Queue = queue.Queue()
-
-        def _worker() -> None:
-            try:
-                q.put(video.receive())
-            except Exception as exc:  # surfaced in the caller thread
-                q.put(exc)
-
-        threading.Thread(target=_worker, daemon=True).start()
-        try:
-            result = q.get(timeout=timeout)
-        except queue.Empty:
-            return None
-        if isinstance(result, Exception):
-            raise result
-        return result
-
     def test_interrupt_advances_epoch_with_boundary_keyframe(self) -> None:
         session_id = self._create_session()
         with self.client.websocket_connect(
@@ -284,7 +240,7 @@ class VideoWsInterruptTests(unittest.TestCase):
                 for _ in range(3):
                     audio.send_bytes(_PCM_CHUNK)
                 # Drain epoch-1 frames.
-                frames1 = self._recv_frames(video, 12)
+                frames1 = recv_frames(video, 12)
                 self.assertTrue(frames1)
                 self.assertTrue(all(h.epoch == 1 for h in frames1))
                 self.assertTrue(
@@ -296,7 +252,7 @@ class VideoWsInterruptTests(unittest.TestCase):
                 audio.send_json({"type": "epoch", "epoch": 2})
                 for _ in range(3):
                     audio.send_bytes(_PCM_CHUNK)
-                frames2 = self._recv_frames(video, 12)
+                frames2 = recv_frames(video, 12)
             self.assertTrue(frames2)
             # No stale frames: every post-interrupt frame is epoch 2, and
             # the first one is an epoch_boundary keyframe (client flushes).
@@ -318,7 +274,7 @@ class VideoWsInterruptTests(unittest.TestCase):
             ) as audio:
                 for _ in range(2):
                     audio.send_bytes(_PCM_CHUNK)
-            self._recv_frames(first, 8)
+            recv_frames(first, 8)
         # Client left; connect again — first frame must be a keyframe.
         with self.client.websocket_connect(
             f"/v1/sessions/{session_id}/video"
@@ -329,7 +285,7 @@ class VideoWsInterruptTests(unittest.TestCase):
             ) as audio:
                 audio.send_json({"type": "epoch", "epoch": 1})
                 audio.send_bytes(_PCM_CHUNK)
-            headers = self._recv_frames(second, 4)
+            headers = recv_frames(second, 4)
             self.assertTrue(headers)
             self.assertTrue(has_flag(headers[0].flags, FLAG_KEYFRAME))
 
@@ -352,7 +308,7 @@ class VideoWsInterruptTests(unittest.TestCase):
                     for _ in range(2):
                         audio.send_bytes(_PCM_CHUNK)
             for sid, video in zip(sids, videos, strict=False):
-                headers = self._recv_frames(video, 8)
+                headers = recv_frames(video, 8)
                 self.assertTrue(headers, f"no frames for {sid}")
                 seqs = [h.seq for h in headers]
                 self.assertEqual(seqs[0], 0, f"{sid} received foreign frame")
