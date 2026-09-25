@@ -98,7 +98,7 @@ class SessionMetrics:
         self.timeline_interrupt_seq += 1
         self.timeline_stamps = {}
 
-    def timeline_decompose_ms(self) -> dict[str, float]:
+    def timeline_decompose_ms(self) -> dict[str, float | list[str]]:
         """Return layer deltas in ms for the current/last interrupt.
 
         Deltas are consecutive-layer differences (detect→audio_flush→
@@ -116,7 +116,7 @@ class SessionMetrics:
             "new_frame",
         ]
         known = [name for name in order if name in stamps]
-        out: dict[str, float] = {}
+        out: dict[str, float | list[str]] = {}
         for prev, cur in zip(known, known[1:], strict=False):
             delta = (stamps[cur] - stamps[prev]) / 1e6
             out[f"{prev}_to_{cur}_ms"] = max(delta, 0.0)
@@ -175,7 +175,7 @@ class SessionMetrics:
 
     def summary(self) -> dict:
         """Return a flat dict summary suitable for logging or /metrics export."""
-        out = {
+        out: dict[str, object] = {
             "session_id": self.session_id,
             "first_packet_ns": self.first_packet_ns,
             "first_playback_ns": self.first_playback_ns,
