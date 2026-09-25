@@ -1,0 +1,7 @@
+{
+  "wire_kbps": 763.4,
+  "bitrate_tolerance": 0.2,
+  "fps_floor": 20.0,
+  "frames": 750,
+  "fps_nominal": 25.0
+}
