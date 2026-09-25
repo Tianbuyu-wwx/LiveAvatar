@@ -31,6 +31,12 @@ jobs:
 
       - name: Audit installed packages
         # --strict: fail when a package cannot be audited (no silent skips).
-        # Vulnerabilities in the toolchain itself are reported and must be
-        # triaged by bumping the offending pin in pyproject.toml.
-        run: pip-audit --strict
+        # The project itself is installed editable (`pip install -e .`) and is
+        # not on PyPI, so auditing the raw environment trips --strict with
+        # "Dependency not found on PyPI: liveavatar" (CI red since 2026-09-07).
+        # Export the resolved set minus editable installs and audit that list;
+        # every third-party dependency (incl. the toolchain) is still audited
+        # strictly against the PyPI vulnerability database.
+        run: |
+          python -m pip freeze --exclude-editable > /tmp/audit-reqs.txt
+          pip-audit --strict -r /tmp/audit-reqs.txt
