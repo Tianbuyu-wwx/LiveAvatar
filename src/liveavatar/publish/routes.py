@@ -6,18 +6,18 @@
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import secrets
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..pool import AvatarNotFound, AvatarPoolError
+from .auth import Unauthorized, require_api_key
 from .encoders import _valid_avatar_id
 from .session_manager import (
     _default_avatar_id,
@@ -56,16 +56,6 @@ class CreateSessionBody(BaseModel):
     )
 
 
-def _check_auth(request: Request) -> JSONResponse | None:
-    """Return a 401 response when the request is not authorized, else None."""
-    key = state.settings.api_key
-    if not key:
-        return None
-    if hmac.compare_digest(request.headers.get("X-API-Key") or "", key):
-        return None
-    return JSONResponse({"error": "unauthorized"}, status_code=401)
-
-
 def _mint_session_token(session_id: str) -> str | None:
     """Short-lived per-session token (M-D), or None when not configured."""
     secret = state.settings.api_secret
@@ -81,51 +71,15 @@ def _mint_session_token(session_id: str) -> str | None:
     )
 
 
-def _extract_bearer(websocket: Any) -> str | None:
-    token = websocket.query_params.get("token") or websocket.headers.get(
-        "x-session-token"
-    )
-    if token:
-        return token
-    auth = websocket.headers.get("authorization", "")
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
-    return None
-
-
-def _check_ws_auth(websocket: Any, session_id: str | None = None) -> bool:
-    """True when the WS handshake is authorized (or auth is disabled).
-
-    Two credential paths: the static ``api_key`` (query param ``api_key``
-    or ``X-API-Key`` header) or a short-lived HS256 session token (query
-    param ``token``, ``X-Session-Token`` or ``Authorization: Bearer``)
-    whose ``sub`` claim matches ``session_id``.
-    """
-    key = state.settings.api_key
-    secret = state.settings.api_secret
-    if not key and not secret:
-        return True
-    provided = websocket.query_params.get("api_key") or websocket.headers.get(
-        "x-api-key"
-    )
-    if key and provided is not None and hmac.compare_digest(provided, key):
-        return True
-    if secret and session_id is not None:
-        token = _extract_bearer(websocket)
-        if token is not None:
-            from .tokens import verify_session_token
-
-            claims = verify_session_token(token, secret)
-            if (
-                claims is not None
-                and claims.get("sub") == session_id
-                and claims.get("scope") == "session"
-            ):
-                return True
-    return False
-
-
 app = FastAPI(title="LiveAvatar", version=__version__, lifespan=_lifespan)
+
+
+@app.exception_handler(Unauthorized)
+async def _unauthorized_handler(
+    request: Request, exc: Unauthorized
+) -> JSONResponse:
+    """Render the auth dependency's failure as the legacy 401 body."""
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
 @app.get("/health")
@@ -134,11 +88,10 @@ async def health() -> JSONResponse:
 
 
 @app.get("/metrics")
-async def metrics_endpoint(request: Request) -> Any:
+async def metrics_endpoint(
+    request: Request, _auth: None = Depends(require_api_key)
+) -> Any:
     """Prometheus exposition (opt-in via LIVEAVATAR_METRICS=on)."""
-    unauthorized = _check_auth(request)
-    if unauthorized is not None:
-        return unauthorized
     from ..observability import (
         _METRICS_CONTENT_TYPE,
         METRICS_ENV,
@@ -157,10 +110,9 @@ async def metrics_endpoint(request: Request) -> Any:
 
 
 @app.get("/v1/avatars")
-async def list_avatars(request: Request) -> JSONResponse:
-    unauthorized = _check_auth(request)
-    if unauthorized is not None:
-        return unauthorized
+async def list_avatars(
+    request: Request, _auth: None = Depends(require_api_key)
+) -> JSONResponse:
     from ..pool import discover_avatars
 
     avatars = discover_avatars(state.pool_config.avatar_data_root)
@@ -174,7 +126,9 @@ async def list_avatars(request: Request) -> JSONResponse:
 
 @app.post("/v1/sessions")
 async def create_session(
-    request: Request, body: CreateSessionBody | None = None
+    request: Request,
+    body: CreateSessionBody | None = None,
+    _auth: None = Depends(require_api_key),
 ) -> JSONResponse:
     """Create a session: acquire the avatar lease and open the video sink.
 
@@ -182,9 +136,6 @@ async def create_session(
     "mode": "push" | "duplex"}``. When ``LIVEAVATAR_API_SECRET`` is set the
     response also carries a short-lived ``session_token`` for WS handshakes.
     """
-    unauthorized = _check_auth(request)
-    if unauthorized is not None:
-        return unauthorized
     body = body or CreateSessionBody()
     session_id = body.session_id or f"sess_{secrets.token_hex(8)}"
     avatar_id = body.avatar_id or _default_avatar_id()
@@ -238,10 +189,9 @@ def _with_session_token(resp: JSONResponse, session_id: str) -> JSONResponse:
 
 
 @app.delete("/v1/sessions/{session_id}")
-async def delete_session(session_id: str, request: Request) -> JSONResponse:
-    unauthorized = _check_auth(request)
-    if unauthorized is not None:
-        return unauthorized
+async def delete_session(
+    session_id: str, request: Request, _auth: None = Depends(require_api_key)
+) -> JSONResponse:
     duplex = state.duplex_sessions.pop(session_id, None)
     if duplex is not None:
         await duplex.stop()
@@ -254,10 +204,9 @@ async def delete_session(session_id: str, request: Request) -> JSONResponse:
 
 
 @app.get("/v1/sessions/{session_id}/stats")
-async def session_stats(session_id: str, request: Request) -> JSONResponse:
-    unauthorized = _check_auth(request)
-    if unauthorized is not None:
-        return unauthorized
+async def session_stats(
+    session_id: str, request: Request, _auth: None = Depends(require_api_key)
+) -> JSONResponse:
     duplex = state.duplex_sessions.get(session_id)
     if duplex is not None:
         return JSONResponse(duplex.stats())

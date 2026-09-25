@@ -151,20 +151,20 @@ class TestWsTokenAuth(_TokenBase):
         return _Stub()
 
     def test_bearer_header_accepted(self) -> None:
-        from liveavatar.publish.routes import _check_ws_auth
+        from liveavatar.publish.auth import require_ws_auth
 
         body = self._create("s1")
         token = body["session_token"]
         self.assertTrue(
-            _check_ws_auth(self._stub_ws(bearer=f"Bearer {token}"), "s1")
+            require_ws_auth(self._stub_ws(bearer=f"Bearer {token}"), "s1")
         )
 
     def test_session_token_header_accepted(self) -> None:
-        from liveavatar.publish.routes import _check_ws_auth
+        from liveavatar.publish.auth import require_ws_auth
 
         body = self._create("s1")
         token = body["session_token"]
-        self.assertTrue(_check_ws_auth(self._stub_ws(token=token), "s1"))
+        self.assertTrue(require_ws_auth(self._stub_ws(token=token), "s1"))
 
     def test_video_ws_with_query_token_allowed(self) -> None:
         body = self._create("s1")

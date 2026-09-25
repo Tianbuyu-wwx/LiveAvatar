@@ -22,6 +22,7 @@ Layout (split from the former single publish.py, A1):
 - ``state``           AppState + the process-wide ``state`` singleton
 - ``encoders``        per-session publisher/encoder factories + avatar_id
 - ``session_manager`` pipeline/voice-pool lifecycle + duplex sessions
+- ``auth``            REST/WS authentication (require_api_key / require_ws_auth)
 - ``routes``          REST endpoints + app assembly
 - ``ws_routes``       audio/video WebSocket endpoints
 
@@ -39,6 +40,10 @@ from fastapi.staticfiles import StaticFiles
 # Import order matters: routes assembles the app, ws_routes registers the
 # WS endpoints on the same instance, then the static mount goes last.
 from . import ws_routes  # noqa: F401  (registers WS routes on app)
+from .auth import (  # noqa: F401
+    require_api_key,
+    require_ws_auth,
+)
 from .encoders import (  # noqa: F401
     _region_encoder_for,
     _service_publisher_factory,
@@ -46,8 +51,6 @@ from .encoders import (  # noqa: F401
 )
 from .routes import (  # noqa: F401
     CreateSessionBody,
-    _check_auth,
-    _check_ws_auth,
     _web_dir,
     app,
 )
