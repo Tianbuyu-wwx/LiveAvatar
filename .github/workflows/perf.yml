@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   perf-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       # Actions are pinned to commit SHAs (not mutable tags) to close the
