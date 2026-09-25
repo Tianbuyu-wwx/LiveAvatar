@@ -2,10 +2,56 @@
 # Copyright (C) 2026 LiveAvatar Contributors
 # Commercial use requires a separate written license; see ../LICENSE.
 
-"""Generic worker pool with lease management and fair queuing.
+"""Generic worker pool: leases, fair queuing, LRU eviction (A3).
 
-A pool manages a set of resource-pinned workers. Each worker is loaded once
-and never switched, which prevents cross-talk between concurrent sessions.
+Internal design note — the single ``WorkerPool`` underlies both the avatar
+pool (:mod:`liveavatar.pool`) and the voice pool
+(:mod:`liveavatar.voice.pool`); subclasses only supply discovery, a worker
+factory, config and error types (see "Subclass contract" below).
+
+State model (all mutations under ``self._lock`` — one asyncio.Lock):
+
+- ``_resources``: discovered/injected ``resource_id → assets``.
+- ``_workers``: ``resource_id → worker`` — each worker is loaded once and
+  never switched (per-resource state like latents / reference audio lives
+  inside it; reloading mid-session risks cross-talk). Loads run via
+  ``asyncio.to_thread`` *while holding the lock*, so first-touch
+  initialization serializes pool-wide (GPU init is not thread-safe).
+- ``_loaded_at``: monotonic load timestamps — the LRU order used by
+  overflow eviction.
+- ``_leases``: ``session_id → Lease`` — one live lease per session; a
+  worker is leased to at most one session (``acquire`` checks
+  ``lease.worker is worker and not expired`` across all leases, so an
+  expired-but-unreaped lease does not block a new acquire).
+- ``_waiters``: per-resource FIFO of deadline-stamped futures.
+
+Scheduling rules:
+
+- Re-acquiring the same resource renews in place; acquiring a different
+  resource releases the old lease first (session migration).
+- A busy worker queues the request; release/expiry dispatch hands the
+  worker to the next eligible waiter (``_dispatch_waiter_locked``), and
+  the acquire timeout path removes the waiter and raises the pool's
+  ``_pool_exhausted_error``.
+- ``_max_workers`` is the hard load cap — beyond it raises
+  ``_gpu_memory_exhausted_error``.
+- The reaper task (every ``_reap_interval``) releases expired leases and
+  LRU-evicts loaded workers above ``_max_loaded_workers`` (0 = unlimited),
+  never touching a resource that is leased or waited on. ``stop`` cancels
+  the reaper, fails pending waiters with ``PoolError`` and clears leases.
+
+Subclass contract (hooks + knobs are properties so they can be config-driven):
+
+- ``_discover_resources`` / ``_default_worker_factory`` (or ctor injection,
+  which the tests use) — required.
+- ``_resource_kind`` (log label), ``_preloaded_resource_ids``, and the
+  ``_max_workers`` / ``_lease_ttl`` / ``_reap_interval`` /
+  ``_acquire_timeout`` / ``_max_loaded_workers`` knobs.
+- Error taxonomy as class attributes — ``_resource_not_found_error`` /
+  ``_pool_exhausted_error`` / ``_gpu_memory_exhausted_error`` — overridden
+  per pool (``AvatarNotFound`` vs ``CharacterNotFound``, ...).
+- ``_create_lease`` for typed leases and ``_on_worker_evicted`` to release
+  per-worker resources after an LRU/manual eviction.
 """
 
 from __future__ import annotations
