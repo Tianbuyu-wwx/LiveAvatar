@@ -49,16 +49,7 @@ from typing import Any
 from liveavatar.runtime.metrics import SessionMetrics
 from liveavatar.runtime.queues import BoundedAsyncQueue
 from liveavatar.runtime.worker import RealtimeWorker
-from liveavatar.spokes import (
-    build_tts_adapter,
-    default_voice_pool_config,
-    resolve_aec,
-    resolve_avatar_adapter,
-    resolve_remote_asr,
-    resolve_text_source,
-    resolve_voice_pool,
-    static_fallback_worker,
-)
+from liveavatar.spokes import build_spokes
 
 logger = logging.getLogger("liveavatar.duplex")
 
@@ -143,70 +134,32 @@ class DuplexSession:
         self.metrics = metrics or SessionMetrics(session_id)
         self.lease_renew_interval = lease_renew_interval
 
-        # ── Spoke resolution (shared with runtime assemblies) ────────
-        remote = resolve_remote_asr(self.settings.asr_url, session_id, logger=logger)
-        self._asr_client: Any = remote.client if remote else None
-        remote_vad = remote.vad if remote else None
-        remote_eou = remote.eou if remote else None
-        remote_asr = remote.asr if remote else None
-
-        aec: Any = resolve_aec(self.settings.enable_aec, logger=logger)
-
-        # Voice pool: externally-owned takes precedence, else construct one
-        # (only meaningful with a char_id configured).
-        self._voice_pool: Any = None
-        self._owns_voice_pool = False
-        self._tts_adapter: Any = None
-        self._lease_renewer: asyncio.Task | None = None
-        if voice_pool is not None:
-            self._voice_pool = voice_pool
-        elif self.settings.char_id:
-            self._voice_pool, self._owns_voice_pool = resolve_voice_pool(
-                None, default_voice_pool_config(), None
-            )
-        tts_for_worker = build_tts_adapter(
-            self._voice_pool, session_id, self.settings.char_id
+        # ── Spoke assembly is delegated to spokes.build_spokes (REF-1);
+        #    the session only holds references and drives the lifecycle.
+        sp = build_spokes(
+            self.settings, session_id=session_id, avatar_id=avatar_id,
+            voice_pool=voice_pool, avatar_pool=avatar_pool, sink=sink,
+            metrics=self.metrics, logger=logger,
         )
-        if tts_for_worker is not None:
-            self._tts_adapter = tts_for_worker
-
-        # LLM spoke.
-        text_source: Any = resolve_text_source(
-            base_url=self.settings.llm_base_url,
-            api_key=self.settings.llm_api_key,
-            model=self.settings.llm_model,
-            system_prompt=self.settings.llm_system_prompt,
-            logger=logger,
-        )
-
-        # Avatar spoke: caller passes the shared pool + a publisher sink.
+        self._asr_client: Any = sp.asr_client
+        self._voice_pool: Any = sp.voice_pool
+        self._owns_voice_pool = sp.owns_voice_pool
+        self._tts_adapter: Any = sp.tts_adapter
         self._avatar_pool = avatar_pool
-        self._avatar_adapter: Any = None
+        self._avatar_adapter: Any = sp.avatar_adapter
+        self._lease_renewer: asyncio.Task | None = None
         self._avatar_lease_renewer: asyncio.Task | None = None
         self.sink = sink
-        self._avatar_adapter = resolve_avatar_adapter(
-            self._avatar_pool,
-            session_id,
-            avatar_id,
-            sink,
-            fallback_worker=static_fallback_worker(avatar_id),
-            metrics=self.metrics,
-            transition_frames=self.settings.avatar_transition_frames,
-        )
 
         self.worker = worker or RealtimeWorker(
             session_id,
             metrics=self.metrics,
-            vad=remote_vad,
-            eou=remote_eou,
-            asr=remote_asr,
-            aec=aec,
-            tts=tts_for_worker,
-            avatar_adapter=self._avatar_adapter,
-            text_source=text_source,
+            vad=sp.vad, eou=sp.eou, asr=sp.asr, aec=sp.aec,
+            tts=sp.tts_adapter, avatar_adapter=sp.avatar_adapter,
+            text_source=sp.text_source,
         )
-        if worker is not None and self._avatar_adapter is not None:
-            self.worker.avatar_adapter = self._avatar_adapter
+        if worker is not None and sp.avatar_adapter is not None:
+            self.worker.avatar_adapter = sp.avatar_adapter
 
         # Downlink queue consumed by the audio WS sender task.
         self.out_queue: BoundedAsyncQueue[dict[str, Any]] = BoundedAsyncQueue(512)

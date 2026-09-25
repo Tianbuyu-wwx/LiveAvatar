@@ -13,6 +13,10 @@ avatar pool + streaming adapter, and the LLM text source.
 import-guard + warning + construction blocks; both now delegate here so the
 resolution rules can never drift apart. Every resolver degrades to ``None``
 (with a warning) instead of raising when an optional extra is missing.
+
+:func:`build_spokes` assembles the whole bundle for one
+:class:`~liveavatar.duplex.DuplexSession` in a single call (REF-1); the
+session then only holds references and drives the lifecycle.
 """
 
 from __future__ import annotations
@@ -230,4 +234,89 @@ def static_fallback_worker(avatar_id: str) -> Any:
             mask_dir="",
             mask_coords_path="",
         )
+    )
+
+
+@dataclass(slots=True)
+class DuplexSpokes:
+    """Fully-resolved spoke bundle for one :class:`DuplexSession` (REF-1).
+
+    All fields are already-resolved references (``None`` = spoke absent /
+    degraded). The bundle is inert: lifecycle (start/stop/lease renewal)
+    stays with the owning session.
+    """
+
+    asr_client: Any
+    vad: Any
+    eou: Any
+    asr: Any
+    aec: Any
+    voice_pool: Any
+    owns_voice_pool: bool
+    tts_adapter: Any
+    text_source: Any
+    avatar_adapter: Any
+
+
+def build_spokes(
+    settings: Any,
+    *,
+    session_id: str,
+    avatar_id: str,
+    voice_pool: Any = None,
+    avatar_pool: Any = None,
+    sink: Any = None,
+    metrics: Any = None,
+    logger: logging.Logger | None = None,
+) -> DuplexSpokes:
+    """Assemble every optional DuplexSession spoke from ``settings``.
+
+    ``settings`` is :class:`~liveavatar.duplex.DuplexSettings` (duck-typed —
+    only the spoke fields are read, keeping the dependency one-way). The
+    ``voice_pool`` / ``avatar_pool`` / ``sink`` / ``metrics`` arguments are
+    the caller-injected overrides shared with the publish service; an
+    externally-owned voice pool always wins over a char_id-constructed one.
+    """
+    lg = logger or logging.getLogger("liveavatar.spokes")
+
+    remote = resolve_remote_asr(settings.asr_url, session_id, logger=lg)
+    aec = resolve_aec(settings.enable_aec, logger=lg)
+
+    if voice_pool is not None:
+        pool, owns_pool = voice_pool, False
+    elif settings.char_id:
+        pool, owns_pool = resolve_voice_pool(None, default_voice_pool_config(), None)
+    else:
+        pool, owns_pool = None, False
+    tts_adapter = build_tts_adapter(pool, session_id, settings.char_id)
+
+    text_source = resolve_text_source(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        system_prompt=settings.llm_system_prompt,
+        logger=lg,
+    )
+
+    avatar_adapter = resolve_avatar_adapter(
+        avatar_pool,
+        session_id,
+        avatar_id,
+        sink,
+        fallback_worker=static_fallback_worker(avatar_id),
+        metrics=metrics,
+        transition_frames=settings.avatar_transition_frames,
+    )
+
+    return DuplexSpokes(
+        asr_client=remote.client if remote else None,
+        vad=remote.vad if remote else None,
+        eou=remote.eou if remote else None,
+        asr=remote.asr if remote else None,
+        aec=aec,
+        voice_pool=pool,
+        owns_voice_pool=owns_pool,
+        tts_adapter=tts_adapter,
+        text_source=text_source,
+        avatar_adapter=avatar_adapter,
     )
