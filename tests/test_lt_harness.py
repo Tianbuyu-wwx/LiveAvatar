@@ -18,6 +18,10 @@ _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts" / "interruption_ev
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+# The eval harness carries eval-environment-only heavy deps (aiohttp);
+# skip on CI where dev extras deliberately exclude them.
+pytest.importorskip("aiohttp", reason="eval-chain heavy dep, not a CI dev extra")
+
 lt_harness = importlib.import_module("lt_harness")
 lt_extract = importlib.import_module("lt_extract")
 

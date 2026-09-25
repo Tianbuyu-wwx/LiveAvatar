@@ -18,6 +18,10 @@ _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts" / "interruption_ev
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+# pf_analyze needs scipy (eval-environment-only heavy dep); skip on CI
+# where dev extras deliberately exclude it.
+pytest.importorskip("scipy", reason="eval-chain heavy dep, not a CI dev extra")
+
 pf_pack = importlib.import_module("pf_pack")
 pf_survey = importlib.import_module("pf_survey")
 pf_analyze = importlib.import_module("pf_analyze")
