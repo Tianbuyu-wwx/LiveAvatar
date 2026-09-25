@@ -20,7 +20,12 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from liveavatar.publish import PublishSettings, app, state
-from liveavatar.publish.tokens import make_session_token, verify_session_token
+from liveavatar.publish.tokens import (
+    _jwt_sign,
+    _key_fingerprint,
+    make_session_token,
+    verify_session_token,
+)
 from tests.test_publish import _pcm
 
 
@@ -66,7 +71,7 @@ class TestTokenIssuance(_TokenBase):
         self.assertIsNotNone(claims)
         self.assertEqual(claims["sub"], "s1")
         self.assertEqual(claims["scope"], "session")
-        self.assertEqual(claims["iss"], self.KEY)
+        self.assertEqual(claims["iss"], _key_fingerprint(self.KEY))
         self.assertLessEqual(claims["exp"] - claims["iat"], 300)
 
     def test_ttl_from_settings(self) -> None:
@@ -79,6 +84,46 @@ class TestTokenIssuance(_TokenBase):
         state.settings.api_secret = ""
         body = self._create("s3")
         self.assertNotIn("session_token", body)
+
+    def test_token_payload_does_not_leak_api_key(self) -> None:
+        """S6 guard: JWT payload is base64-decodable by any client, so it
+        must never contain the raw static key (nor the signing secret)."""
+        import hashlib
+        import time as _time
+
+        body = self._create("s9")
+        head, payload, _sig = body["session_token"].split(".")
+        decoded = _b64_to_dict(payload)
+        raw = json.dumps(decoded)
+        self.assertNotIn(self.KEY, raw)
+        self.assertNotIn(self.SECRET, raw)
+        self.assertEqual(
+            decoded["iss"],
+            hashlib.sha256(self.KEY.encode()).hexdigest()[:8],
+        )
+        # And the fingerprint must not be reversible to the key: a wrong
+        # key maps to a different fingerprint.
+        self.assertNotEqual(
+            decoded["iss"],
+            hashlib.sha256(("x" + self.KEY).encode()).hexdigest()[:8],
+        )
+        self.assertLessEqual(int(decoded["exp"]), int(_time.time()) + 300)
+
+    def test_future_nbf_rejected(self) -> None:
+        import time
+
+        now = int(time.time())
+        future = now + 3600
+        payload = {
+            "iss": _key_fingerprint(self.KEY),
+            "sub": "s1",
+            "iat": now,
+            "nbf": future,
+            "exp": future + 300,
+            "scope": "session",
+        }
+        token = _jwt_sign(payload, self.SECRET)
+        self.assertIsNone(verify_session_token(token, self.SECRET))
 
 
 class TestWsTokenAuth(_TokenBase):

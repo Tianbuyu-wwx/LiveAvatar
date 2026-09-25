@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import secrets
@@ -15,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from .. import __version__
 from ..pool import AvatarNotFound, AvatarPoolError
 from .encoders import _valid_avatar_id
 from .session_manager import (
@@ -59,7 +61,7 @@ def _check_auth(request: Request) -> JSONResponse | None:
     key = state.settings.api_key
     if not key:
         return None
-    if request.headers.get("X-API-Key") == key:
+    if hmac.compare_digest(request.headers.get("X-API-Key") or "", key):
         return None
     return JSONResponse({"error": "unauthorized"}, status_code=401)
 
@@ -106,7 +108,7 @@ def _check_ws_auth(websocket: Any, session_id: str | None = None) -> bool:
     provided = websocket.query_params.get("api_key") or websocket.headers.get(
         "x-api-key"
     )
-    if key and provided == key:
+    if key and provided is not None and hmac.compare_digest(provided, key):
         return True
     if secret and session_id is not None:
         token = _extract_bearer(websocket)
@@ -123,7 +125,7 @@ def _check_ws_auth(websocket: Any, session_id: str | None = None) -> bool:
     return False
 
 
-app = FastAPI(title="LiveAvatar", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="LiveAvatar", version=__version__, lifespan=_lifespan)
 
 
 @app.get("/health")

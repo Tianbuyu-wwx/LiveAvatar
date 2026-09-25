@@ -147,6 +147,8 @@ class TestSessionToken(unittest.TestCase):
     """Session-token signing (M-C task 17 base): HS256 + short TTL."""
 
     def test_token_is_hs256_jwt(self):
+        from liveavatar.publish.tokens import _key_fingerprint
+
         token = make_session_token(
             api_key="devkey", api_secret="secret", session_id="u1"
         )
@@ -155,7 +157,7 @@ class TestSessionToken(unittest.TestCase):
         payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=="))
         self.assertEqual(header["alg"], "HS256")
         self.assertEqual(header["typ"], "JWT")
-        self.assertEqual(payload["iss"], "devkey")
+        self.assertEqual(payload["iss"], _key_fingerprint("devkey"))
         self.assertEqual(payload["sub"], "u1")
         self.assertEqual(payload["scope"], "session")
 

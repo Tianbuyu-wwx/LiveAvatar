@@ -72,9 +72,22 @@ def test_no_ignored_source_files() -> None:
     offenders = [
         line
         for line in out.splitlines()
-        if line.endswith(".py") and "__pycache__" not in line
+        if line.endswith(".py")
+        and "__pycache__" not in line
+        # data/ is runtime/experiment space by design (fully gitignored);
+        # scratch .py debris there is not source. The models/ incident this
+        # guard prevents was about source trees (src/), which stay covered.
+        and not line.startswith("data/")
     ]
     assert not offenders, f"source files are gitignored: {offenders}"
+
+
+def test_app_version_matches_package_version() -> None:
+    """FastAPI app version must track liveavatar.__version__ (Q2 guard)."""
+    from liveavatar import __version__
+    from liveavatar.publish.routes import app
+
+    assert app.version == __version__
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -38,6 +38,17 @@ def _jwt_sign(payload: dict[str, Any], secret: str) -> str:
     return signing_input + "." + _b64url(sig)
 
 
+def _key_fingerprint(api_key: str) -> str:
+    """Short non-reversible identifier for the static key.
+
+    Tokens travel to untrusted clients and JWT payloads are base64 (not
+    encrypted), so the ``iss`` claim carries a sha256 fingerprint instead
+    of the raw ``LIVEAVATAR_API_KEY`` — the static secret must never leave
+    the server side.
+    """
+    return hashlib.sha256(api_key.encode()).hexdigest()[:8]
+
+
 def make_session_token(
     *,
     api_key: str,
@@ -48,13 +59,13 @@ def make_session_token(
 ) -> str:
     """Mint a short-lived session token (HS256) for ``session_id``.
 
-    Claims: ``iss`` = api key id, ``sub`` = session id, ``scope`` limits
-    what the bearer may do, ``exp`` enforces the short TTL. Verify with
-    :func:`verify_session_token`.
+    Claims: ``iss`` = key fingerprint (never the raw key), ``sub`` =
+    session id, ``scope`` limits what the bearer may do, ``exp`` enforces
+    the short TTL. Verify with :func:`verify_session_token`.
     """
     now = int(time.time())
     payload = {
-        "iss": api_key,
+        "iss": _key_fingerprint(api_key),
         "sub": session_id,
         "iat": now,
         "nbf": now - 5,
@@ -78,7 +89,10 @@ def verify_session_token(token: str, api_secret: str) -> dict[str, Any] | None:
         claims: dict[str, Any] = json.loads(
             base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
         )
-        if int(claims.get("exp", 0)) < int(time.time()):
+        now = int(time.time())
+        if int(claims.get("exp", 0)) < now:
+            return None
+        if int(claims.get("nbf", 0)) > now:
             return None
         return claims
     except (ValueError, KeyError, TypeError):
